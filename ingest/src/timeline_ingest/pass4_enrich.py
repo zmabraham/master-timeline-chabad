@@ -56,3 +56,51 @@ def apply_overrides(
             score = assign_significance(r)
         out.append(r.model_copy(update={"significance": int(score)}))
     return out
+
+
+from timeline_ingest.schema import EventPhoto
+
+
+def _build_entity_index(kg: dict) -> dict[str, EventPhoto]:
+    out: dict[str, EventPhoto] = {}
+    for name, entity in kg.items():
+        if not isinstance(entity, dict):
+            continue
+        url = entity.get("image")
+        if not url:
+            continue
+        out[name.lower()] = EventPhoto(
+            url=url,
+            credit=entity.get("credit", "Chabadpedia"),
+            caption=entity.get("caption"),
+        )
+    return out
+
+
+_TOKEN_RE = re.compile(r"[\w֐-׿]+", re.UNICODE)
+
+
+def _tokenize(text: str) -> set[str]:
+    return {t.lower() for t in _TOKEN_RE.findall(text)}
+
+
+def attach_photos(
+    records: Iterable[EventRecord],
+    *,
+    entity_index: dict[str, EventPhoto],
+) -> list[EventRecord]:
+    """Match entity → event by full-token overlap on title+summary."""
+    out: list[EventRecord] = []
+    entity_tokens = {name: _tokenize(name) for name in entity_index}
+    for r in records:
+        if r.photo is not None:
+            out.append(r)
+            continue
+        event_tokens = _tokenize(f"{r.title_en} {r.summary_en}")
+        photo: EventPhoto | None = None
+        for entity_name, e_toks in entity_tokens.items():
+            if e_toks and e_toks.issubset(event_tokens):
+                photo = entity_index[entity_name]
+                break
+        out.append(r.model_copy(update={"photo": photo}))
+    return out
