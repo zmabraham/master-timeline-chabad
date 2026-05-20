@@ -25,7 +25,13 @@ ts()  { date +"%Y-%m-%d %H:%M:%S"; }
 log() { printf "[%s] %s\n" "$(ts)" "$*" >> "$LOG"; }
 
 pass2_alive() {
-  pgrep -f "timeline_ingest pass2" >/dev/null 2>&1
+  # Match only the actual Python invocation, not bash wrappers / monitor
+  # scripts / heredocs whose command-line happens to contain that string.
+  pgrep -fa "timeline_ingest pass2" 2>/dev/null \
+    | grep -E "^[0-9]+ .*(python|/python3).*-m timeline_ingest pass2" \
+    | grep -qv "$0" \
+    || return 1
+  return 0
 }
 
 cache_count() {
