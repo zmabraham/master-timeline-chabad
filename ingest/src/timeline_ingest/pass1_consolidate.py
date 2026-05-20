@@ -1,6 +1,7 @@
 """Pass 1 — load existing extractions, normalize, dedupe."""
 
 import json
+import re
 from pathlib import Path
 
 from timeline_ingest.dates import parse_year_only
@@ -52,6 +53,43 @@ def load_compact_json(path: Path) -> list[EventRecord]:
                 story_path=f"stories/{eid}.md",
                 categories=[_normalize_category(row.get("c", "general"))],
                 sources=[EventSource(name="chabad-timeline-compact.json")],
+            )
+        )
+    return out
+
+
+_EVENT_RE = re.compile(
+    r"^-\s*\*\*(\d{4}):\*\*\s*(.+?)$\n(?:\s*-\s*_(.+?)_)?",
+    re.MULTILINE,
+)
+
+
+def load_comprehensive_md(path: Path) -> list[EventRecord]:
+    text = path.read_text(encoding="utf-8")
+    seen: set[str] = set()
+    out: list[EventRecord] = []
+    for m in _EVENT_RE.finditer(text):
+        year = int(m.group(1))
+        title_he = m.group(2).strip()
+        summary_he = (m.group(3) or "").strip()
+        try:
+            date = parse_year_only(year)
+        except ValueError:
+            continue
+        eid = event_id(title_he, year=year, month=None, day=None)
+        if eid in seen:
+            continue
+        seen.add(eid)
+        out.append(
+            EventRecord(
+                id=eid,
+                significance=25,
+                date=date,
+                title_en="",
+                summary_en=summary_he,
+                story_path=f"stories/{eid}.md",
+                categories=["general"],
+                sources=[EventSource(name="chabad-history-timeline-comprehensive.md")],
             )
         )
     return out
