@@ -4,6 +4,7 @@ import json
 import re
 from pathlib import Path
 
+from timeline_ingest.config import Config
 from timeline_ingest.dates import parse_year_only
 from timeline_ingest.ids import event_id
 from timeline_ingest.schema import EventCategory, EventRecord, EventSource
@@ -93,3 +94,24 @@ def load_comprehensive_md(path: Path) -> list[EventRecord]:
             )
         )
     return out
+
+
+def consolidate(cfg: Config) -> Path:
+    records: list[EventRecord] = []
+    records.extend(load_compact_json(cfg.existing_extractions.compact_json))
+    records.extend(load_comprehensive_md(cfg.existing_extractions.comprehensive_md))
+
+    seen: dict[str, EventRecord] = {}
+    for r in records:
+        if r.id not in seen:
+            seen[r.id] = r
+        else:
+            existing = seen[r.id]
+            existing.sources.extend(r.sources)
+
+    out_dir = cfg.output.intermediate_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "01_consolidated.json"
+    payload = [r.model_dump(mode="json") for r in seen.values()]
+    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out_path
