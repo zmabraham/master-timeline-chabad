@@ -78,4 +78,7 @@ def run_pass5(cfg: Config) -> Path:
     for r in final_records:
         (stories_dir / f"{r.id}.md").write_text(_render_story_md(r), encoding="utf-8")
 
+    from timeline_ingest.lint import lint_emit
+    lint_emit(public)
+
     return events_path
