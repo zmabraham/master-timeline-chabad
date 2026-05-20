@@ -9,8 +9,8 @@ Plan: [`docs/superpowers/plans/2026-05-20-ingestion-pipeline.md`](../plans/2026-
 - [x] **Task 1** — Scaffold the ingest package (commits `255ca88`, `c7740de`)
 - [x] **Task 2** — EventRecord Pydantic schema (commits `11da49a`, `1226c28`)
 - [x] **Task 3** — Stable event ID hashing (commits `47b41ed`, `47859e3`)
-- [ ] **Task 4** — Date normalization utility
-- [ ] **Task 5** — sources.yaml + config loader
+- [x] **Task 4** — Date normalization utility (commits `3088ece`, `db7df33`)
+- [x] **Task 5** — sources.yaml + config loader (commit `c561369`)
 - [ ] **Task 6** — glossary.yaml + significance_overrides.yaml seeds
 - [ ] **Task 7** — Pass 1 compact JSON loader
 - [ ] **Task 8** — Pass 1 comprehensive markdown loader

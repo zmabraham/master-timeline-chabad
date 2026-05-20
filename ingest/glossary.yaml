@@ -1,0 +1,35 @@
+# Locked Hebrew → English renderings.
+# When LLMs translate, they are instructed to use these exact phrases.
+# Expand this file as new proper nouns appear in extractions.
+
+rebbes:
+  בעש"ט: "Baal Shem Tov"
+  הרב המגיד ממעזריטש: "Maggid of Mezeritch"
+  אדמו"ר הזקן: "Alter Rebbe"
+  רבי שניאור זלמן: "Rabbi Schneur Zalman"
+  אדמו"ר האמצעי: "Mitteler Rebbe"
+  רבי דובער: "Rabbi DovBer"
+  צמח צדק: "Tzemach Tzedek"
+  אדמו"ר מהר"ש: "Maharash"
+  אדמו"ר הרש"ב: "Rashab"
+  אדמו"ר הריי"צ: "Rayatz"
+  הרבי: "the Rebbe"
+  רבי מנחם מענדל: "Rabbi Menachem Mendel"
+
+places:
+  ליובאוויטש: "Lubavitch"
+  ליאזנא: "Liozna"
+  פטרבורג: "Petersburg"
+  ארץ הקודש: "Holy Land"
+  ברית המועצות: "Soviet Union"
+  רוסיה הצארית: "Tsarist Russia"
+
+terms:
+  ישיבת תומכי תמימים: "Tomchei Tmimim Yeshiva"
+  חסידות: "Chassidus"
+  שיחה: "sicha"
+  מאמר: "maamar"
+  פרסום: "publication"
+  התוועדות: "farbrengen"
+  נשיאות: "leadership"
+  בעל הילולא: "yahrzeit subject"

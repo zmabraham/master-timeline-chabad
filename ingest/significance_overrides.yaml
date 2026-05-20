@@ -1,0 +1,5 @@
+# Manual overrides applied in Pass 4.
+# Key is the 12-char hex event_id; value is an integer 0..100.
+# Populate after the first Pass 4 review when specific events need re-scoring.
+
+overrides: {}
