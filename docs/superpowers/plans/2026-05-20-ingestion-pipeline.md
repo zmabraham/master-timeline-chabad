@@ -45,7 +45,14 @@ The ingestion package lives entirely under `ingest/`. Web app code is out of sco
 
 ## Anthropic SDK guidance
 
-@superpowers:claude-api applies — use it when adding LLM-calling code (Pass 2, Pass 3). Key requirements from the skill: enable prompt caching on the long system/glossary prefix, use `claude-sonnet-4-6` for extraction, use `claude-haiku-4-5-20251001` for translation (cheaper, sufficient quality with glossary lock).
+@superpowers:claude-api applies — use it when adding LLM-calling code (Pass 2, Pass 3). Key requirements from the skill: enable prompt caching on the long system/glossary prefix, use `claude-sonnet-4-6` for extraction, use `claude-haiku-4-5-20251001` for translation (cheaper, sufficient quality with glossary lock). Verify exact model ids against the claude-api skill at implementation time; if the API returns 404 on either id, that skill resolves the current canonical ids.
+
+## Spec-coverage notes (read before starting)
+
+- **Chabadpedia knowledge graphs (KGs)** are used by Pass 4 for *photo attachment only*. KG-based event mining (extracting birth/death/founding dates from entity records) is **deferred to v1.5**; major Rebbe-lifecycle events are already covered by the existing extractions (Pass 1) plus Undaunted and the 17 history books (Pass 2), so this defer doesn't leave a gap in the v1 corpus.
+- **Chabadpedia biographical pages** ARE in scope for Pass 2 (see Task 16 — third loop). They are plain text under `nanoclaw/groups/whatsapp_main/chabadpedia-web/pages/`.
+- **Full story bodies** travel through every pass via an optional `story_body` field on `EventRecord` (added in Task 2). Pass 2 fills it with the 2–4 sentence story the LLM produces; Pass 5 writes it to `stories/<id>.md`. Pass 1 records (from the older Hebrew extractions) have no rich story body — Pass 5 falls back to `title + year + summary` for those.
+- **Photo files** are downloaded and resized to WebP in Pass 5 (see Task 23). The linter (Task 24) verifies every referenced `photo.url` resolves to an actual file in `public/photos/`.
 
 ---
 
@@ -359,6 +366,7 @@ class EventRecord(BaseModel):
     hebrew_date: HebrewDate | None = None
     title_en: str
     summary_en: str
+    story_body: str | None = None         # 2-4 sentence full story; written to stories/<id>.md by Pass 5
     story_path: str
     category: EventCategory
     rebbe: RebbeId | None = None
@@ -1340,7 +1348,7 @@ Run from `ingest/`:
 make pass1
 ```
 
-Expected: `OK → intermediate/01_consolidated.json` and the file contains a few thousand records (~4-5k unique after dedupe).
+Expected: `OK → intermediate/01_consolidated.json` and the file contains a few thousand records (~3.5–6k unique after dedupe; KG event mining is deferred to v1.5, so this pass only sources from the compact JSON and comprehensive markdown).
 
 - [ ] **Step 2: Validate the output is well-formed**
 
@@ -1352,13 +1360,18 @@ import json
 from timeline_ingest.schema import EventRecord
 data = json.load(open('intermediate/01_consolidated.json'))
 print(f'count: {len(data)}')
-for r in data[:5]:
+assert len(data) >= 3000, f'too few records ({len(data)}); loaders likely silently dropping rows'
+for r in data:
     EventRecord.model_validate(r)  # raises on schema mismatch
-print('all sampled records validate')
+# Pass 1 leaves title_en empty (filled in Pass 3); just sanity-check summaries exist.
+non_empty_summary = sum(1 for r in data if r['summary_en'])
+print(f'records with non-empty summary: {non_empty_summary}')
+assert non_empty_summary >= 1000, 'too few records carried summary text through'
+print('all records validate')
 "
 ```
 
-Expected: count between 3,500 and 6,000; `all sampled records validate`.
+Expected: count >= 3,000; at least 1,000 records have a non-empty summary; `all records validate`. If either assertion fires, one of the loaders is silently dropping rows — debug before continuing.
 
 - [ ] **Step 3: Commit no code; record the artifact size for future reference**
 
@@ -1773,12 +1786,14 @@ def _row_to_record(row: dict, *, source_name: str) -> EventRecord | None:
     precision = "day" if (month and day) else ("month" if month else "year")
     date = EventDate(y=year, m=month, d=day, precision=precision)
     eid = event_id(title, year=year, month=month, day=day)
+    story_body = (row.get("story") or "").strip() or None
     return EventRecord(
         id=eid,
         level="micro",
         date=date,
         title_en=title,
         summary_en=row.get("summary", "").strip(),
+        story_body=story_body,
         story_path=f"stories/{eid}.md",
         category=cat,
         sources=[EventSource(name=source_name)],
@@ -1832,7 +1847,7 @@ git commit -m "feat(ingest): pass2 single-book extraction driver"
 
 ---
 
-## Task 16: Pass 2 — top-level extract() across all books
+## Task 16: Pass 2 — top-level extract() across all books AND Chabadpedia pages
 
 **Files:**
 - Modify: `ingest/src/timeline_ingest/pass2_extract.py`
@@ -1862,6 +1877,11 @@ def _cfg(tmp_path: Path) -> Config:
     book = tmp_path / "books" / "u_chapter1.txt"
     book.parent.mkdir(parents=True, exist_ok=True)
     book.write_text("some chapter text", encoding="utf-8")
+
+    pages_dir = tmp_path / "pages"
+    pages_dir.mkdir(parents=True, exist_ok=True)
+    (pages_dir / "Alter_Rebbe.txt").write_text("Some bio text.", encoding="utf-8")
+
     return Config(
         existing_extractions=ExistingExtractions(
             compact_json=tmp_path / "x.json",
@@ -1874,7 +1894,7 @@ def _cfg(tmp_path: Path) -> Config:
             chabad_library_dir=tmp_path / "lib",
             chabad_library_history_book_ids=[],
         ),
-        chabadpedia_pages=ChabadpediaPages(dir=tmp_path / "pages"),
+        chabadpedia_pages=ChabadpediaPages(dir=pages_dir),
         photos=PhotoSources(knowledge_graph_files=[]),
         output=OutputPaths(
             intermediate_dir=tmp_path / "intermediate",
@@ -1893,6 +1913,10 @@ async def test_run_pass2_writes_extracted(tmp_path: Path):
     assert out.exists()
     data = json.loads(out.read_text(encoding="utf-8"))
     assert isinstance(data, list)
+    # Both Undaunted chapter AND Chabadpedia page should produce records.
+    sources_seen = {s["name"] for rec in data for s in rec["sources"]}
+    assert any(s == "Undaunted" for s in sources_seen)
+    assert any(s.startswith("Chabadpedia/") for s in sources_seen)
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -1938,6 +1962,20 @@ async def run_pass2(cfg: Config, *, _call_override=None) -> Path:
             if r.id not in seen:
                 seen.add(r.id)
                 all_records.append(r)
+
+    # Chabadpedia biographical pages
+    pages_dir = cfg.chabadpedia_pages.dir
+    if pages_dir.exists():
+        for page_path in sorted(pages_dir.glob("*.txt")) + sorted(pages_dir.glob("*.json")):
+            recs = await extract_book(
+                client,
+                page_path,
+                source_name=f"Chabadpedia/{page_path.stem}",
+            )
+            for r in recs:
+                if r.id not in seen:
+                    seen.add(r.id)
+                    all_records.append(r)
 
     out_dir = cfg.output.intermediate_dir
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -2418,21 +2456,34 @@ def _build_entity_index(kg: dict) -> dict[str, EventPhoto]:
     return out
 
 
+_TOKEN_RE = re.compile(r"[\w֐-׿]+", re.UNICODE)
+
+
+def _tokenize(text: str) -> set[str]:
+    return {t.lower() for t in _TOKEN_RE.findall(text)}
+
+
 def attach_photos(
     records: Iterable[EventRecord],
     *,
     entity_index: dict[str, EventPhoto],
 ) -> list[EventRecord]:
+    """Match entity → event by full-token overlap on title+summary.
+
+    Substring matching would over-fire (e.g. "Tanya" inside "Tannaya"); we require
+    every token of the entity name to appear as a whole token in the event text.
+    """
     out: list[EventRecord] = []
+    entity_tokens = {name: _tokenize(name) for name in entity_index}
     for r in records:
         if r.photo is not None:
             out.append(r)
             continue
-        haystack = f"{r.title_en} {r.summary_en}".lower()
+        event_tokens = _tokenize(f"{r.title_en} {r.summary_en}")
         photo: EventPhoto | None = None
-        for entity_name, p in entity_index.items():
-            if entity_name in haystack:
-                photo = p
+        for entity_name, e_toks in entity_tokens.items():
+            if e_toks and e_toks.issubset(event_tokens):
+                photo = entity_index[entity_name]
                 break
         out.append(r.model_copy(update={"photo": photo}))
     return out
@@ -2869,25 +2920,43 @@ def _cfg(tmp_path):
 def test_pass5_writes_events_and_stories(tmp_path):
     cfg = _cfg(tmp_path)
     cfg.output.intermediate_dir.mkdir(parents=True)
-    payload = [{
-        "id": "abc", "level": "macro",
-        "date": {"y": 1812, "precision": "year"},
-        "title_en": "Alter Rebbe passes",
-        "summary_en": "Summary.",
-        "story_path": "stories/abc.md",
-        "category": "rebbe",
-        "sources": [{"name": "x"}],
-        "related": [],
-    }]
+    payload = [
+        {
+            "id": "abc", "level": "macro",
+            "date": {"y": 1812, "precision": "year"},
+            "title_en": "Alter Rebbe passes",
+            "summary_en": "Summary.",
+            "story_body": "Full story paragraph one. And paragraph two.",
+            "story_path": "stories/abc.md",
+            "category": "rebbe",
+            "sources": [{"name": "x"}],
+            "related": [],
+        },
+        {
+            "id": "xyz", "level": "micro",
+            "date": {"y": 1813, "precision": "year"},
+            "title_en": "Letter to a chossid",
+            "summary_en": "Fallback summary text.",
+            "story_body": None,
+            "story_path": "stories/xyz.md",
+            "category": "general",
+            "sources": [{"name": "x"}],
+            "related": [],
+        },
+    ]
     (cfg.output.intermediate_dir / "04_enriched.json").write_text(json.dumps(payload))
     run_pass5(cfg)
+
     events_path = cfg.output.public_dir / "events.json"
     assert events_path.exists()
     stored = json.loads(events_path.read_text())
-    assert stored[0]["id"] == "abc"
-    story = cfg.output.public_dir / "stories" / "abc.md"
-    assert story.exists()
-    assert "Alter Rebbe passes" in story.read_text()
+    assert {r["id"] for r in stored} == {"abc", "xyz"}
+
+    story_abc = (cfg.output.public_dir / "stories" / "abc.md").read_text()
+    assert "Full story paragraph one." in story_abc          # story_body used
+
+    story_xyz = (cfg.output.public_dir / "stories" / "xyz.md").read_text()
+    assert "Fallback summary text." in story_xyz             # summary fallback used
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -2906,10 +2975,45 @@ Create `ingest/src/timeline_ingest/pass5_emit.py`:
 """Pass 5 — write final artifacts: events.json + stories/ + photos/."""
 
 import json
+from io import BytesIO
 from pathlib import Path
 
+import httpx
+from PIL import Image
+
 from timeline_ingest.config import Config
-from timeline_ingest.schema import EventRecord
+from timeline_ingest.schema import EventPhoto, EventRecord
+
+
+_PHOTO_MAX_WIDTH = 800
+_PHOTO_TIMEOUT_S = 15.0
+
+
+def _render_story_md(r: EventRecord) -> str:
+    body = r.story_body or r.summary_en
+    return (
+        f"# {r.title_en}\n\n"
+        f"*{r.date.y}*\n\n"
+        f"{body}\n"
+    )
+
+
+def _download_and_resize(url: str, out_path: Path) -> bool:
+    """Fetch URL, resize to WebP at <=_PHOTO_MAX_WIDTH wide. Return True on success."""
+    try:
+        with httpx.Client(timeout=_PHOTO_TIMEOUT_S, follow_redirects=True) as client:
+            resp = client.get(url)
+            resp.raise_for_status()
+        im = Image.open(BytesIO(resp.content))
+        im = im.convert("RGB")
+        if im.width > _PHOTO_MAX_WIDTH:
+            ratio = _PHOTO_MAX_WIDTH / im.width
+            new_size = (_PHOTO_MAX_WIDTH, int(im.height * ratio))
+            im = im.resize(new_size, Image.LANCZOS)
+        im.save(out_path, format="WEBP", quality=82, method=6)
+        return True
+    except (httpx.HTTPError, OSError, ValueError):
+        return False
 
 
 def run_pass5(cfg: Config) -> Path:
@@ -2921,22 +3025,37 @@ def run_pass5(cfg: Config) -> Path:
     public.mkdir(parents=True, exist_ok=True)
     stories_dir = public / "stories"
     stories_dir.mkdir(parents=True, exist_ok=True)
+    photos_dir = public / "photos"
+    photos_dir.mkdir(parents=True, exist_ok=True)
+
+    # Download / resize photos; rewrite r.photo.url to local relative path on success.
+    final_records: list[EventRecord] = []
+    for r in records:
+        photo = r.photo
+        if photo is not None:
+            local = photos_dir / f"{r.id}.webp"
+            if local.exists() or _download_and_resize(photo.url, local):
+                photo = EventPhoto(
+                    url=f"photos/{r.id}.webp",
+                    credit=photo.credit,
+                    caption=photo.caption,
+                )
+                r = r.model_copy(update={"photo": photo})
+            else:
+                # Remote fetch failed — drop the photo rather than ship a broken URL.
+                r = r.model_copy(update={"photo": None})
+        final_records.append(r)
 
     # Write events.json (compact)
     events_path = public / "events.json"
     events_path.write_text(
-        json.dumps([r.model_dump(mode="json") for r in records], ensure_ascii=False),
+        json.dumps([r.model_dump(mode="json") for r in final_records], ensure_ascii=False),
         encoding="utf-8",
     )
 
     # Write per-event story markdown
-    for r in records:
-        story = (
-            f"# {r.title_en}\n\n"
-            f"*{r.date.y}*\n\n"
-            f"{r.summary_en}\n"
-        )
-        (stories_dir / f"{r.id}.md").write_text(story, encoding="utf-8")
+    for r in final_records:
+        (stories_dir / f"{r.id}.md").write_text(_render_story_md(r), encoding="utf-8")
 
     return events_path
 ```
@@ -3048,6 +3167,37 @@ def test_lint_fails_for_missing_story_file(tmp_path):
     # no story file
     with pytest.raises(LintError, match="story file"):
         lint_emit(public)
+
+
+def test_lint_fails_for_remote_photo_url(tmp_path):
+    public = tmp_path / "public"
+    (public / "stories").mkdir(parents=True)
+    payload = [{
+        "id": "x", "level": "macro", "date": {"y": 1812, "precision": "year"},
+        "title_en": "t", "summary_en": "s", "story_path": "stories/x.md",
+        "category": "rebbe", "sources": [{"name": "x"}], "related": [],
+        "photo": {"url": "https://example.org/p.jpg", "credit": "c"},
+    }]
+    _write(public / "events.json", payload)
+    (public / "stories" / "x.md").write_text("# t\n")
+    with pytest.raises(LintError, match="still remote"):
+        lint_emit(public)
+
+
+def test_lint_fails_for_missing_photo_file(tmp_path):
+    public = tmp_path / "public"
+    (public / "stories").mkdir(parents=True)
+    payload = [{
+        "id": "x", "level": "macro", "date": {"y": 1812, "precision": "year"},
+        "title_en": "t", "summary_en": "s", "story_path": "stories/x.md",
+        "category": "rebbe", "sources": [{"name": "x"}], "related": [],
+        "photo": {"url": "photos/x.webp", "credit": "c"},
+    }]
+    _write(public / "events.json", payload)
+    (public / "stories" / "x.md").write_text("# t\n")
+    # no photos/x.webp
+    with pytest.raises(LintError, match="photo file missing"):
+        lint_emit(public)
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -3099,12 +3249,25 @@ def lint_emit(public_dir: Path) -> None:
         if not story_file.exists():
             raise LintError(f"missing story file {story_file}")
 
-    # Macro events should have photos (warn, not fail, in v1)
-    # Suspicious category=general & level=macro
+    # Photo url resolves (after Pass 5 rewrites remote URLs to local relative paths)
+    for r in records:
+        if r.photo is None:
+            continue
+        url = r.photo.url
+        if url.startswith(("http://", "https://")):
+            # A remote URL surviving past Pass 5 means the download failed and the
+            # record wasn't cleared. That's a Pass 5 bug — fail loudly here.
+            raise LintError(f"event {r.id} photo.url is still remote ({url})")
+        local = public_dir / url
+        if not local.exists():
+            raise LintError(f"event {r.id} photo file missing at {local}")
+
+    # Soft warnings (not failures): suspicious categorizations
     for r in records:
         if r.level == "macro" and r.category == "general":
-            # Suspicious — but only warn via print, since v1 corpus may have edge cases
             print(f"WARN: event {r.id} is macro+general — review")
+        if r.level == "macro" and r.photo is None:
+            print(f"WARN: event {r.id} is macro but has no photo — review")
 ```
 
 - [ ] **Step 4: Call linter from pass5**
@@ -3204,7 +3367,116 @@ git commit -m "test(ingest): golden-file regression guard for pass1 compact load
 
 ---
 
-## Task 26: Final integration — run the full pipeline against real data
+## Task 26: Idempotency test
+
+**Spec requirement:** Re-running each pass against the previous pass's output must produce identical bytes (modulo cache hits).
+
+**Files:**
+- Create: `ingest/tests/test_idempotency.py`
+
+- [ ] **Step 1: Write the failing test**
+
+Create `ingest/tests/test_idempotency.py`:
+
+```python
+import json
+from pathlib import Path
+
+from timeline_ingest.config import Config, ExistingExtractions, BooksToExtract, ChabadpediaPages, PhotoSources, OutputPaths
+from timeline_ingest.pass1_consolidate import consolidate
+from timeline_ingest.pass4_enrich import run_pass4
+from timeline_ingest.pass5_emit import run_pass5
+
+
+def _cfg(tmp_path: Path) -> Config:
+    return Config(
+        existing_extractions=ExistingExtractions(
+            compact_json=Path(__file__).parent / "fixtures" / "compact_sample.json",
+            comprehensive_md=Path(__file__).parent / "fixtures" / "comprehensive_sample.md",
+            chabadpedia_kg_dir=tmp_path,
+        ),
+        books_to_extract=BooksToExtract(
+            undaunted_dir=tmp_path, undaunted_chapters_glob="*.txt",
+            chabad_library_dir=tmp_path, chabad_library_history_book_ids=[]),
+        chabadpedia_pages=ChabadpediaPages(dir=tmp_path),
+        photos=PhotoSources(knowledge_graph_files=[]),
+        output=OutputPaths(
+            intermediate_dir=tmp_path / "intermediate", cache_dir=tmp_path / "cache",
+            public_dir=tmp_path / "public", glossary_path=tmp_path / "g.yaml",
+            level_overrides_path=tmp_path / "l.yaml"),
+    )
+
+
+def test_pass1_idempotent(tmp_path):
+    cfg = _cfg(tmp_path)
+    out_a = consolidate(cfg)
+    bytes_a = out_a.read_bytes()
+    out_b = consolidate(cfg)
+    bytes_b = out_b.read_bytes()
+    assert bytes_a == bytes_b
+
+
+def test_pass4_idempotent(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.output.intermediate_dir.mkdir(parents=True)
+    cfg.output.level_overrides_path.write_text("overrides: {}\n", encoding="utf-8")
+    payload = [{
+        "id": "abc", "level": "micro",
+        "date": {"y": 1812, "precision": "year"},
+        "title_en": "Alter Rebbe passes away",
+        "summary_en": "",
+        "story_body": None,
+        "story_path": "stories/abc.md",
+        "category": "rebbe",
+        "sources": [{"name": "t"}], "related": [],
+    }]
+    (cfg.output.intermediate_dir / "03_translated.json").write_text(json.dumps(payload))
+    out_a = run_pass4(cfg)
+    bytes_a = out_a.read_bytes()
+    out_b = run_pass4(cfg)
+    bytes_b = out_b.read_bytes()
+    assert bytes_a == bytes_b
+
+
+def test_pass5_idempotent_without_photos(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.output.intermediate_dir.mkdir(parents=True)
+    payload = [{
+        "id": "abc", "level": "macro",
+        "date": {"y": 1812, "precision": "year"},
+        "title_en": "Alter Rebbe passes",
+        "summary_en": "Summary.",
+        "story_body": "Full story text.",
+        "story_path": "stories/abc.md",
+        "category": "rebbe",
+        "sources": [{"name": "t"}], "related": [],
+    }]
+    (cfg.output.intermediate_dir / "04_enriched.json").write_text(json.dumps(payload))
+    out_a = run_pass5(cfg)
+    bytes_a = out_a.read_bytes()
+    out_b = run_pass5(cfg)
+    bytes_b = out_b.read_bytes()
+    assert bytes_a == bytes_b
+```
+
+- [ ] **Step 2: Run tests**
+
+```bash
+cd ingest && uv run pytest tests/test_idempotency.py -v && cd ..
+```
+
+Expected: PASS. (If any pass non-deterministically reorders or re-stringifies dicts, this will fail — fix by sorting keys in JSON dumps or carrying ordered inputs through.)
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add ingest/tests/test_idempotency.py
+git commit -m "test(ingest): idempotency tests for pass1, pass4, pass5"
+```
+
+---
+
+## Task 27: Final integration — run the full pipeline against real data
 
 **Files:** (no new files)
 
@@ -3282,13 +3554,20 @@ git commit -m "data: ingest run $(date +%Y-%m-%d) — full corpus emit"
 
 ## Plan-end checklist
 
-After all 26 tasks complete, the repo state should be:
+After all 27 tasks complete, the repo state should be:
 
-- [ ] `ingest/` package fully implemented and tested (~75+ tests passing)
-- [ ] `public/events.json` committed, ~5,000 records
-- [ ] `public/stories/<id>.md` committed, one per event
-- [ ] `public/photos/<id>.webp` — photo handling moved to web app plan (Plan 2)
-- [ ] Linter passes on the emitted artifacts
+- [ ] `ingest/` package fully implemented and tested (~85+ tests passing)
+- [ ] `public/events.json` committed, ~5,000 records (or however many the real ingest yields)
+- [ ] `public/stories/<id>.md` committed, one per event (uses `story_body` when Pass 2 captured it, else falls back to `title + year + summary`)
+- [ ] `public/photos/<id>.webp` committed for every event with a `photo` (downloaded from Chabadpedia, resized to ≤800px wide, WebP @ 82 quality)
+- [ ] Linter passes on the emitted artifacts (no duplicates, no orphan related ids, no missing story files, no remote photo URLs, no missing photo files)
+- [ ] Idempotency tests green for passes 1, 4, 5
 - [ ] `make all` is the one-command rebuild
+
+**Deferred to v1.5 (out of scope for this plan):**
+
+- Chabadpedia knowledge-graph event mining (extracting birth/death/start-of-leadership events from entity records). Major Rebbe-lifecycle events already arrive via the existing extractions and via Pass 2 over Undaunted / history books, so this defer doesn't leave a v1 gap.
+- Translating the multi-paragraph `story_body` for Pass 1 records (the older Hebrew extractions, which only carry short Hebrew summaries — these get translated by Pass 3 and then surface as one-sentence stories in the UI).
+- Golden-file regression coverage for passes 2–5 (Task 25 only exercises Pass 1).
 
 **Next plan:** `docs/superpowers/plans/2026-05-2N-web-app.md` — Vite + TypeScript + vis-timeline web app consuming this ingestion's output.
