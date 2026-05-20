@@ -81,3 +81,54 @@ def test_date_precision_year():
 def test_date_precision_day_requires_m_and_d():
     with pytest.raises(ValidationError):
         EventDate(y=1812, precision="day")
+
+
+def test_unknown_field_raises():
+    """Schema is strict — typo'd field names must fail loudly."""
+    with pytest.raises(ValidationError):
+        EventRecord(
+            id="x", significance=10,
+            date=EventDate(y=1812, precision="year"),
+            title_en="t", summary_en="s", story_path="p",
+            categories=["rebbe"], sources=[],
+            catagories=["rebbe"],  # typo
+        )
+
+
+def test_date_precision_year_rejects_m_and_d():
+    with pytest.raises(ValidationError):
+        EventDate(y=1812, m=3, precision="year")
+    with pytest.raises(ValidationError):
+        EventDate(y=1812, m=3, d=15, precision="year")
+
+
+def test_date_precision_month_rejects_d():
+    with pytest.raises(ValidationError):
+        EventDate(y=1812, m=3, d=15, precision="month")
+
+
+def test_date_precision_month_valid_with_just_m():
+    d = EventDate(y=1812, m=3, precision="month")
+    assert d.m == 3 and d.d is None
+
+
+def test_empty_id_raises():
+    with pytest.raises(ValidationError):
+        EventRecord(
+            id="",  # empty
+            significance=10,
+            date=EventDate(y=1812, precision="year"),
+            title_en="t", summary_en="s", story_path="p",
+            categories=["rebbe"], sources=[],
+        )
+
+
+def test_empty_title_raises():
+    with pytest.raises(ValidationError):
+        EventRecord(
+            id="x", significance=10,
+            date=EventDate(y=1812, precision="year"),
+            title_en="",  # empty
+            summary_en="s", story_path="p",
+            categories=["rebbe"], sources=[],
+        )

@@ -2,7 +2,12 @@
 
 from typing import Literal, Self
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class _StrictModel(BaseModel):
+    """Every domain model rejects unknown fields — typos must fail loudly in a multi-pass pipeline."""
+    model_config = ConfigDict(extra="forbid")
 
 EventCategory = Literal[
     "rebbe",
@@ -28,7 +33,7 @@ RebbeId = Literal[
 DatePrecision = Literal["year", "month", "day"]
 
 
-class EventDate(BaseModel):
+class EventDate(_StrictModel):
     y: int = Field(ge=1500, le=2100)
     m: int | None = Field(default=None, ge=1, le=12)
     d: int | None = Field(default=None, ge=1, le=31)
@@ -40,36 +45,40 @@ class EventDate(BaseModel):
             raise ValueError("precision=day requires m and d")
         if self.precision == "month" and self.m is None:
             raise ValueError("precision=month requires m")
+        if self.precision == "year" and (self.m is not None or self.d is not None):
+            raise ValueError("precision=year must not have m or d")
+        if self.precision == "month" and self.d is not None:
+            raise ValueError("precision=month must not have d")
         return self
 
 
-class HebrewDate(BaseModel):
+class HebrewDate(_StrictModel):
     y: int
     m: str | None = None
     d: int | None = None
 
 
-class EventPhoto(BaseModel):
+class EventPhoto(_StrictModel):
     url: str
     credit: str
     caption: str | None = None
 
 
-class EventSource(BaseModel):
+class EventSource(_StrictModel):
     name: str
     url: str | None = None
     page: int | None = None
 
 
-class EventRecord(BaseModel):
-    id: str
+class EventRecord(_StrictModel):
+    id: str = Field(min_length=1)
     significance: int = Field(ge=0, le=100)
     date: EventDate
     hebrew_date: HebrewDate | None = None
-    title_en: str
-    summary_en: str
+    title_en: str = Field(min_length=1)
+    summary_en: str = Field(min_length=1)
     story_body: str | None = None         # 2-4 sentence full story; written to stories/<id>.md by Pass 5
-    story_path: str
+    story_path: str = Field(min_length=1)
     categories: list[EventCategory] = Field(min_length=1)
     tags: list[str] = Field(default_factory=list)
     rebbe: RebbeId | None = None
