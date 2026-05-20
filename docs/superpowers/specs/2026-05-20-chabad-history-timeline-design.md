@@ -83,12 +83,14 @@ The 17 history books (full set, not trimmed):
 
 ## Data Model
 
-```ts
-type EventLevel = "macro" | "meso" | "micro";
+The schema is deliberately soft: multi-valued categories and tags, free-form
+tag list, and a numeric significance score (rather than a fixed macro/meso/micro
+enum) so the frontend can re-bin without re-running ingestion.
 
+```ts
 type EventRecord = {
   id: string;                      // hash of normalized title + date
-  level: EventLevel;
+  significance: number;            // 0–100; frontend bins to macro/meso/micro by zoom
   date: {
     y: number;
     m?: number;
@@ -103,7 +105,7 @@ type EventRecord = {
   title_en: string;
   summary_en: string;              // 1–2 sentence card text
   story_path: string;              // relative path to stories/<id>.md (lazy-loaded)
-  category:
+  categories: Array<                // multi-valued: an event can be both publication and education
     | "rebbe"
     | "publication"
     | "conflict"
@@ -111,8 +113,10 @@ type EventRecord = {
     | "organization"
     | "location"
     | "calendar"
-    | "general";
-  rebbe?:
+    | "general"
+  >;
+  tags: string[];                  // free-form: geography, themes, named figures, etc.
+  rebbe?:                          // singular: the Rebbe leading at the time (when applicable)
     | "besht"
     | "magid"
     | "alter"
@@ -131,18 +135,20 @@ type EventRecord = {
 
 `events.json` is `EventRecord[]` with `story_path` referencing `public/stories/<id>.md`. The full story body is **not** embedded in `events.json` — it's lazy-fetched by the side panel to keep the initial payload small.
 
-### Level assignment
+### Significance assignment
 
 Two-pass:
 
-1. **Heuristic pass** assigns initial level based on event content:
-   - **macro** — Rebbe lifecycle events (birth, passing, leadership start), foundational publications (Tanya, Torah Or, Likkutei Torah), major arrests/exiles, founding events (Tomchei Tmimim, KGB resistance).
-   - **meso** — Yeshiva foundings, dated sichos / maamarim with public significance, named correspondence, war/persecution episodes, family events of central figures, named regional milestones.
-   - **micro** — Everything else with a date: individual letters, yahrzeits of non-central figures, individual anecdotes, calendar dates of secondary significance.
+1. **Heuristic pass** assigns a 0–100 score based on event content:
+   - **80–100** — Rebbe lifecycle events (birth, passing, leadership start), foundational publications (Tanya, Torah Or, Likkutei Torah), major arrests/exiles, foundings of central institutions (Tomchei Tmimim, KGB-era resistance).
+   - **40–79** — Yeshiva foundings, dated sichos / maamarim with public significance, named correspondence, war/persecution episodes, family events of central figures, named regional milestones.
+   - **0–39** — Everything else with a date: individual letters, yahrzeits of non-central figures, individual anecdotes, calendar dates of secondary significance.
 
-2. **Manual override file** (`ingest/level_overrides.yaml`) lets the maintainer pin specific event IDs to a specific level. Re-running the pipeline preserves overrides.
+2. **Manual override file** (`ingest/significance_overrides.yaml`) lets the maintainer pin specific event IDs to a specific score. Re-running the pipeline preserves overrides.
 
-Expected counts after dedupe: ~50–80 macro, ~400–800 meso, ~3,000–6,000 micro.
+The frontend bins `significance` into macro / meso / micro by the same thresholds (80 / 40) for display purposes. Re-tuning the thresholds does NOT require re-running ingestion — it's a frontend constant.
+
+Expected counts after dedupe: ~50–80 with significance≥80, ~400–800 in 40–79, ~3,000–6,000 below 40.
 
 ## Ingestion Pipeline
 
@@ -249,28 +255,37 @@ Between Pass 4 and Pass 5, the pipeline emits `ingest/review.html` listing all m
                               └─────────────────────────────────────┘
 ```
 
-### Zoom → level mapping
+### Zoom → significance binning
 
-vis-timeline exposes a zoom-level value (millisecond range visible). We bin that to:
+vis-timeline exposes a zoom-level value (millisecond range visible). The frontend bins events by `significance` at runtime — re-tuning the thresholds doesn't require re-running ingestion:
 
-| Zoom range visible | Show |
+| Zoom range visible | Significance threshold to render individually |
 |---|---|
-| > 100 years | macro only; meso/micro clustered into numeric badges |
-| 30–100 years | macro + meso; micro clustered |
-| < 30 years | macro + meso + micro (all individually visible) |
+| > 100 years | ≥ 80 only ("macro"); 40–79 ("meso") and < 40 ("micro") clustered |
+| 30–100 years | ≥ 40 individually; < 40 clustered |
+| < 30 years | all individually visible |
 
-CSS classes `level-macro`, `level-meso`, `level-micro` style differently (size, color, photo thumbnail visibility).
+CSS classes `level-macro` (sig ≥ 80), `level-meso` (40–79), `level-micro` (< 40) style differently (size, color, photo thumbnail visibility).
 
-### Groups (horizontal lanes)
+### Group-by (configurable horizontal lanes)
 
-One group per Rebbe (`besht`, `magid`, `alter`, `mitteler`, `tzemach-tzedek`, `maharash`, `rashab`, `rayatz`, `rebbe`) plus a `general` lane for events not tied to a single Rebbe (e.g., dated yahrzeits of figures outside the dynasty, contemporary movements). The group strip auto-scrolls when there are too many lanes for the viewport height.
+The user picks the spatial axis from a Group-by toggle in the toolbar. Available axes:
+
+- **Rebbe** — one lane per Rebbe (`besht`, `magid`, `alter`, `mitteler`, `tzemach-tzedek`, `maharash`, `rashab`, `rayatz`, `rebbe`) plus a `general` lane for events without a Rebbe attribution. The default v1 view.
+- **Category** — one lane per category (`rebbe`, `publication`, `conflict`, `education`, ...). Events with multiple categories appear in multiple lanes (or in the first by precedence — implementation detail).
+- **Era** — one lane per derived era (matches the existing era buckets like "Early Chabad", "Beit Rivkah", "Lubavitch Russia", ...).
+- **Tag** — one lane per top-N most frequent tags; rare-tag events fall into "Other".
+- **Flat** — single lane, time only.
+
+The group-strip auto-scrolls when there are too many lanes for the viewport height. Tags-driven layout is a v1 feature, not deferred.
 
 ### Search & filters
 
-- **Search** — Lunr index over `title_en + summary_en`. Hit results are highlighted on the timeline; non-matching events fade to ~20% opacity but remain visible (so context isn't lost).
-- **Rebbe filter** — Show/hide entire groups.
-- **Category filter** — Multi-select chips. Same fade-vs-hide behavior as search.
-- **Level filter** — Override the zoom-based level visibility (force "show all micro" or "macro only").
+- **Search** — Lunr index over `title_en + summary_en + tags`. Hit results are highlighted on the timeline; non-matching events fade to ~20% opacity but remain visible (so context isn't lost).
+- **Rebbe filter** — Multi-select chips over the 9 Rebbe IDs + "no rebbe".
+- **Category filter** — Multi-select chips over the 8 categories. An event matches if any of its `categories[]` overlap.
+- **Tag filter** — Multi-select chips, populated from the top-N most frequent tags. Same fade-vs-hide behavior as search.
+- **Significance filter** — Override the zoom-based binning (slider 0–100, or quick presets "macro only" / "macro + meso" / "all").
 
 ### Side panel
 
@@ -339,12 +354,14 @@ One group per Rebbe (`besht`, `magid`, `alter`, `mitteler`, `tzemach-tzedek`, `m
 ### Data quality (post-emit linter)
 
 - Every event has `date.y`.
-- Every macro event has a `photo`.
+- Every event has at least one entry in `categories[]`.
+- `significance` is an integer 0–100.
+- Every event with `significance ≥ 80` has a `photo` (soft warning, not failure — best-effort photo coverage).
 - No duplicate `id`s.
 - No orphan `related[]` ids (every referenced id exists).
-- No event with `level == macro` and `category == "general"` (suspicious — flag for review).
+- No event with `significance ≥ 80` whose only category is `"general"` (suspicious — flag for review).
 - All `story_path` files exist on disk.
-- All `photo.url` paths resolve.
+- All `photo.url` paths resolve (post-Pass-5, every photo URL is a local relative path).
 
 ## Project Structure
 
@@ -361,7 +378,7 @@ master-timeline-chabad/
 ├── ingest/
 │   ├── pyproject.toml
 │   ├── glossary.yaml
-│   ├── level_overrides.yaml
+│   ├── significance_overrides.yaml
 │   ├── sources.yaml            # paths to all source files
 │   ├── pipeline/
 │   │   ├── pass1_consolidate.py

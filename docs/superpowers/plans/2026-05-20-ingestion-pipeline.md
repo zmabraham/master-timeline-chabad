@@ -21,7 +21,7 @@ The ingestion package lives entirely under `ingest/`. Web app code is out of sco
 | `ingest/pyproject.toml` | Package metadata, dependencies, uv lock |
 | `ingest/sources.yaml` | Absolute paths to every source file/dir on disk |
 | `ingest/glossary.yaml` | Locked Hebrew→English renderings (Rebbe names, places, terms) |
-| `ingest/level_overrides.yaml` | Manual `id → level` overrides applied in Pass 4 |
+| `ingest/significance_overrides.yaml` | Manual `id → level` overrides applied in Pass 4 |
 | `ingest/src/timeline_ingest/__init__.py` | Package marker, version |
 | `ingest/src/timeline_ingest/schema.py` | Pydantic `EventRecord` + nested models |
 | `ingest/src/timeline_ingest/ids.py` | `event_id(title, date)` hash function |
@@ -53,6 +53,7 @@ The ingestion package lives entirely under `ingest/`. Web app code is out of sco
 - **Chabadpedia biographical pages** ARE in scope for Pass 2 (see Task 16 — third loop). They are plain text under `nanoclaw/groups/whatsapp_main/chabadpedia-web/pages/`.
 - **Full story bodies** travel through every pass via an optional `story_body` field on `EventRecord` (added in Task 2). Pass 2 fills it with the 2–4 sentence story the LLM produces; Pass 5 writes it to `stories/<id>.md`. Pass 1 records (from the older Hebrew extractions) have no rich story body — Pass 5 falls back to `title + year + summary` for those.
 - **Photo files** are downloaded and resized to WebP in Pass 5 (see Task 23). The linter (Task 24) verifies every referenced `photo.url` resolves to an actual file in `public/photos/`.
+- **Soft schema:** `EventRecord` uses **`categories: list[EventCategory]`** (multi-valued — an event can be both publication and education), **`tags: list[str]`** (free-form, populated by LLM in Pass 2 for geography/themes/named figures), and **`significance: int (0-100)`** instead of a `level` enum. The frontend bins `significance` into macro/meso/micro at render time, so re-tuning thresholds doesn't require re-ingestion. Manual overrides live in `ingest/significance_overrides.yaml` (id → int).
 
 ---
 
@@ -231,44 +232,69 @@ from timeline_ingest.schema import EventRecord, EventDate, EventSource
 def test_minimal_valid_event():
     record = EventRecord(
         id="abc123",
-        level="macro",
+        significance=85,
         date=EventDate(y=1812, precision="year"),
         title_en="Alter Rebbe passes away",
         summary_en="The first Chabad Rebbe passes away.",
         story_path="stories/abc123.md",
-        category="rebbe",
+        categories=["rebbe"],
         sources=[EventSource(name="Chabadpedia")],
     )
     assert record.id == "abc123"
     assert record.date.y == 1812
     assert record.rebbe is None
+    assert record.tags == []  # default empty
 
 
-def test_invalid_level_raises():
+def test_event_supports_multiple_categories_and_tags():
+    record = EventRecord(
+        id="x",
+        significance=60,
+        date=EventDate(y=1900, precision="year"),
+        title_en="t", summary_en="s", story_path="p",
+        categories=["publication", "education"],
+        tags=["russia", "tomchei tmimim", "yeshiva curriculum"],
+        sources=[],
+    )
+    assert "publication" in record.categories
+    assert "education" in record.categories
+    assert "russia" in record.tags
+
+
+def test_invalid_significance_raises():
     with pytest.raises(ValidationError):
         EventRecord(
-            id="x",
-            level="huge",
+            id="x", significance=150,
             date=EventDate(y=1812, precision="year"),
-            title_en="t",
-            summary_en="s",
-            story_path="p",
-            category="rebbe",
-            sources=[],
+            title_en="t", summary_en="s", story_path="p",
+            categories=["rebbe"], sources=[],
+        )
+    with pytest.raises(ValidationError):
+        EventRecord(
+            id="x", significance=-1,
+            date=EventDate(y=1812, precision="year"),
+            title_en="t", summary_en="s", story_path="p",
+            categories=["rebbe"], sources=[],
         )
 
 
 def test_invalid_category_raises():
     with pytest.raises(ValidationError):
         EventRecord(
-            id="x",
-            level="macro",
+            id="x", significance=10,
             date=EventDate(y=1812, precision="year"),
-            title_en="t",
-            summary_en="s",
-            story_path="p",
-            category="not-a-category",
-            sources=[],
+            title_en="t", summary_en="s", story_path="p",
+            categories=["not-a-category"], sources=[],
+        )
+
+
+def test_empty_categories_raises():
+    with pytest.raises(ValidationError):
+        EventRecord(
+            id="x", significance=10,
+            date=EventDate(y=1812, precision="year"),
+            title_en="t", summary_en="s", story_path="p",
+            categories=[], sources=[],
         )
 
 
@@ -301,7 +327,6 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, Field, model_validator
 
-EventLevel = Literal["macro", "meso", "micro"]
 EventCategory = Literal[
     "rebbe",
     "publication",
@@ -361,14 +386,15 @@ class EventSource(BaseModel):
 
 class EventRecord(BaseModel):
     id: str
-    level: EventLevel
+    significance: int = Field(ge=0, le=100)
     date: EventDate
     hebrew_date: HebrewDate | None = None
     title_en: str
     summary_en: str
     story_body: str | None = None         # 2-4 sentence full story; written to stories/<id>.md by Pass 5
     story_path: str
-    category: EventCategory
+    categories: list[EventCategory] = Field(min_length=1)
+    tags: list[str] = Field(default_factory=list)
     rebbe: RebbeId | None = None
     era: str | None = None
     photo: EventPhoto | None = None
@@ -678,7 +704,7 @@ output:
   cache_dir: cache
   public_dir: ../public
   glossary_path: glossary.yaml
-  level_overrides_path: level_overrides.yaml
+  significance_overrides_path: significance_overrides.yaml
 ```
 
 - [ ] **Step 2: Write failing test for config loader**
@@ -712,7 +738,7 @@ def test_load_config_returns_sources(tmp_path: Path):
         "  cache_dir: cache\n"
         "  public_dir: ../public\n"
         "  glossary_path: glossary.yaml\n"
-        "  level_overrides_path: level_overrides.yaml\n"
+        "  significance_overrides_path: significance_overrides.yaml\n"
     )
     cfg = load_config(yml)
     assert cfg.existing_extractions.compact_json == Path("/a")
@@ -767,7 +793,7 @@ class OutputPaths(BaseModel):
     cache_dir: Path
     public_dir: Path
     glossary_path: Path
-    level_overrides_path: Path
+    significance_overrides_path: Path
 
 
 class Config(BaseModel):
@@ -805,7 +831,7 @@ git commit -m "feat(ingest): typed config loader + sources.yaml manifest"
 
 **Files:**
 - Create: `ingest/glossary.yaml`
-- Create: `ingest/level_overrides.yaml`
+- Create: `ingest/significance_overrides.yaml`
 
 - [ ] **Step 1: Write glossary stub**
 
@@ -849,14 +875,14 @@ terms:
   בעל הילולא: "yahrzeit subject"
 ```
 
-- [ ] **Step 2: Write level_overrides stub**
+- [ ] **Step 2: Write significance_overrides stub**
 
-Create `ingest/level_overrides.yaml`:
+Create `ingest/significance_overrides.yaml`:
 
 ```yaml
 # Manual overrides applied in Pass 4.
-# Key is the 12-char hex event_id; value is one of macro|meso|micro.
-# Populate after the first Pass 4 review when specific events need re-leveling.
+# Key is the 12-char hex event_id; value is an integer 0..100.
+# Populate after the first Pass 4 review when specific events need re-scoring.
 
 overrides: {}
 ```
@@ -864,7 +890,7 @@ overrides: {}
 - [ ] **Step 3: Commit**
 
 ```bash
-git add ingest/glossary.yaml ingest/level_overrides.yaml
+git add ingest/glossary.yaml ingest/significance_overrides.yaml
 git commit -m "feat(ingest): seed glossary and level-overrides files"
 ```
 
@@ -907,7 +933,9 @@ def test_load_compact_dedupes_and_normalizes(tmp_path: Path):
     # First record uses placeholder English title pending Pass 3 translation.
     assert records[0].title_en == ""  # cleared, will be filled in Pass 3
     assert records[0].date.y in (1812, 1880)
-    assert records[0].category == "rebbe"
+    assert records[0].categories == ["rebbe"]
+    assert records[0].tags == []        # Pass 1 doesn't extract tags
+    assert records[0].significance == 25  # default; Pass 4 reassigns
     ids = {r.id for r in records}
     assert len(ids) == 2
 ```
@@ -972,12 +1000,12 @@ def load_compact_json(path: Path) -> list[EventRecord]:
         out.append(
             EventRecord(
                 id=eid,
-                level="micro",  # default; Pass 4 reassigns
+                significance=25,  # default micro-band; Pass 4 reassigns
                 date=date,
                 title_en="",  # filled in Pass 3
                 summary_en=row.get("d", "").strip(),
                 story_path=f"stories/{eid}.md",
-                category=_normalize_category(row.get("c", "general")),
+                categories=[_normalize_category(row.get("c", "general"))],
                 sources=[EventSource(name="chabad-timeline-compact.json")],
             )
         )
@@ -1090,12 +1118,12 @@ def load_comprehensive_md(path: Path) -> list[EventRecord]:
         out.append(
             EventRecord(
                 id=eid,
-                level="micro",
+                significance=25,
                 date=date,
                 title_en="",
                 summary_en=summary_he,
                 story_path=f"stories/{eid}.md",
-                category="general",
+                categories=["general"],
                 sources=[EventSource(name="chabad-history-timeline-comprehensive.md")],
             )
         )
@@ -1157,7 +1185,7 @@ def _cfg(tmp_path: Path, compact: Path, md: Path) -> Config:
             cache_dir=tmp_path / "cache",
             public_dir=tmp_path / "public",
             glossary_path=tmp_path / "g.yaml",
-            level_overrides_path=tmp_path / "l.yaml",
+            significance_overrides_path=tmp_path / "l.yaml",
         ),
     )
 
@@ -1623,8 +1651,12 @@ from timeline_ingest.pass2_extract import parse_extraction_response, EXTRACTION_
 def test_parse_extracts_valid_events():
     response = """Here are the events:
 [
-  {"title": "Alter Rebbe passes away", "year": 1812, "month": 12, "day": null, "category": "rebbe", "summary": "Passing in Piena.", "story": "On 24 Tevet 5573..."},
-  {"title": "Tanya first print", "year": 1797, "month": null, "day": null, "category": "publication", "summary": "First edition.", "story": "Slavita printing."}
+  {"title": "Alter Rebbe passes away", "year": 1812, "month": 12, "day": null,
+   "categories": ["rebbe"], "tags": ["piena"],
+   "summary": "Passing in Piena.", "story": "On 24 Tevet 5573..."},
+  {"title": "Tanya first print", "year": 1797, "month": null, "day": null,
+   "categories": ["publication", "education"], "tags": ["slavita"],
+   "summary": "First edition.", "story": "Slavita printing."}
 ]
 """
     events = parse_extraction_response(response)
@@ -1632,6 +1664,8 @@ def test_parse_extracts_valid_events():
     assert events[0]["title"] == "Alter Rebbe passes away"
     assert events[0]["year"] == 1812
     assert events[0]["month"] == 12
+    assert events[1]["categories"] == ["publication", "education"]
+    assert "slavita" in events[1]["tags"]
 
 
 def test_parse_handles_empty_list():
@@ -1647,7 +1681,8 @@ def test_parse_raises_on_garbage():
 def test_extraction_prompt_mentions_required_fields():
     assert "title" in EXTRACTION_SYSTEM_PROMPT
     assert "year" in EXTRACTION_SYSTEM_PROMPT
-    assert "category" in EXTRACTION_SYSTEM_PROMPT
+    assert "categories" in EXTRACTION_SYSTEM_PROMPT
+    assert "tags" in EXTRACTION_SYSTEM_PROMPT
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -1675,7 +1710,12 @@ For every clearly dated event in the input, output one JSON object with these fi
 - year: integer Gregorian year (required)
 - month: integer 1–12 or null
 - day: integer 1–31 or null
-- category: one of rebbe | publication | conflict | education | organization | location | calendar | general
+- categories: an array of one or more strings from this fixed set:
+    rebbe | publication | conflict | education | organization | location | calendar | general
+  An event can have multiple categories (e.g. ["publication","education"]).
+- tags: an array of 0+ free-form lowercase string labels (geography like "russia"/"poland",
+  themes like "samizdat"/"kgb"/"war", named figures, named institutions). Useful for
+  faceted search and filtering. Do not duplicate the categories here.
 - summary: one English sentence
 - story: 2–4 English sentences with context
 
@@ -1729,7 +1769,7 @@ from timeline_ingest.pass2_extract import extract_book
 
 async def fake_call(client, *, system, user, model):
     # Return one event regardless of input
-    return '[{"title": "Test event", "year": 1812, "month": null, "day": null, "category": "rebbe", "summary": "s", "story": "story body"}]'
+    return '[{"title": "Test event", "year": 1812, "month": null, "day": null, "categories": ["rebbe"], "summary": "s", "story": "story body"}]'
 
 
 async def test_extract_book_returns_records(tmp_path: Path):
@@ -1780,22 +1820,32 @@ def _row_to_record(row: dict, *, source_name: str) -> EventRecord | None:
         return None
     month = row.get("month") if isinstance(row.get("month"), int) else None
     day = row.get("day") if isinstance(row.get("day"), int) else None
-    cat = row.get("category", "general")
-    if cat not in _VALID_CATEGORIES:
-        cat = "general"
+
+    # categories: accept array (current schema) or single-string (legacy/garbled LLM output)
+    raw_cats = row.get("categories") or row.get("category") or ["general"]
+    if isinstance(raw_cats, str):
+        raw_cats = [raw_cats]
+    cats = [c for c in raw_cats if c in _VALID_CATEGORIES] or ["general"]
+
+    raw_tags = row.get("tags") or []
+    if not isinstance(raw_tags, list):
+        raw_tags = []
+    tags = [t.lower().strip() for t in raw_tags if isinstance(t, str) and t.strip()]
+
     precision = "day" if (month and day) else ("month" if month else "year")
     date = EventDate(y=year, m=month, d=day, precision=precision)
     eid = event_id(title, year=year, month=month, day=day)
     story_body = (row.get("story") or "").strip() or None
     return EventRecord(
         id=eid,
-        level="micro",
+        significance=25,   # default; Pass 4 reassigns
         date=date,
         title_en=title,
         summary_en=row.get("summary", "").strip(),
         story_body=story_body,
         story_path=f"stories/{eid}.md",
-        category=cat,
+        categories=cats,
+        tags=tags,
         sources=[EventSource(name=source_name)],
     )
 
@@ -1872,7 +1922,7 @@ async def fake_call(client, *, system, user, model):
     suffix = abs(hash(user)) % 10_000
     return (
         f'[{{"title": "Fake event {suffix}", "year": 1800, "month": null, "day": null, '
-        f'"category": "general", "summary": "x", "story": "y"}}]'
+        f'"categories": ["general"], "summary": "x", "story": "y"}}]'
     )
 
 
@@ -1904,7 +1954,7 @@ def _cfg(tmp_path: Path) -> Config:
             cache_dir=tmp_path / "cache",
             public_dir=tmp_path / "public",
             glossary_path=tmp_path / "g.yaml",
-            level_overrides_path=tmp_path / "l.yaml",
+            significance_overrides_path=tmp_path / "l.yaml",
         ),
     )
 
@@ -2050,12 +2100,12 @@ async def fake_call(client, *, system, user, model):
 def _rec() -> EventRecord:
     return EventRecord(
         id="abc",
-        level="micro",
+        significance=25,
         date=EventDate(y=1812, precision="year"),
         title_en="",
         summary_en="נפטר אדמו\"ר הזקן",
         story_path="stories/abc.md",
-        category="rebbe",
+        categories=["rebbe"],
         sources=[EventSource(name="x")],
     )
 
@@ -2235,138 +2285,136 @@ git commit -m "feat(ingest): pass3 batch translation with glossary lock"
 
 ---
 
-## Task 18: Pass 4 — level heuristic + manual overrides
+## Task 18: Pass 4 — significance heuristic + manual overrides
 
 **Files:**
 - Create: `ingest/src/timeline_ingest/pass4_enrich.py`
-- Create: `ingest/tests/test_pass4_level.py`
+- Create: `ingest/tests/test_pass4_significance.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `ingest/tests/test_pass4_level.py`:
+Create `ingest/tests/test_pass4_significance.py`:
 
 ```python
-from timeline_ingest.pass4_enrich import assign_level, apply_overrides
+from timeline_ingest.pass4_enrich import assign_significance, apply_overrides
 from timeline_ingest.schema import EventRecord, EventDate, EventSource
 
 
-def _r(title, category, sources=None):
+def _r(title, categories, sources=None):
     return EventRecord(
         id="x",
-        level="micro",
+        significance=0,
         date=EventDate(y=1812, precision="year"),
         title_en=title,
         summary_en="",
         story_path="stories/x.md",
-        category=category,
+        categories=categories,
         sources=sources or [EventSource(name="t")],
     )
 
 
-def test_macro_for_rebbe_birth():
-    r = _r("Alter Rebbe born", "rebbe")
-    assert assign_level(r) == "macro"
+def test_macro_band_for_rebbe_birth():
+    r = _r("Alter Rebbe born", ["rebbe"])
+    assert assign_significance(r) >= 80
 
 
-def test_macro_for_tanya_publication():
-    r = _r("Tanya first printed", "publication")
-    assert assign_level(r) == "macro"
+def test_macro_band_for_tanya_publication():
+    r = _r("Tanya first printed", ["publication"])
+    assert assign_significance(r) >= 80
 
 
-def test_meso_for_yeshiva_founding():
-    r = _r("Tomchei Tmimim founded in Lubavitch", "education")
-    assert assign_level(r) == "meso"
+def test_meso_band_for_yeshiva_founding():
+    r = _r("Tomchei Tmimim founded in Lubavitch", ["education"])
+    s = assign_significance(r)
+    assert 40 <= s < 80
 
 
-def test_micro_for_random_letter():
-    r = _r("Letter from Rebbe to a chossid in Paris", "general")
-    assert assign_level(r) == "micro"
+def test_micro_band_for_random_letter():
+    r = _r("Letter from Rebbe to a chossid in Paris", ["general"])
+    assert assign_significance(r) < 40
 
 
-def test_apply_overrides_overrides_heuristic():
-    r = _r("Letter from Rebbe to a chossid", "general")
-    out = apply_overrides([r], {"x": "macro"})
-    assert out[0].level == "macro"
+def test_score_is_clamped_to_0_100():
+    r = _r("Alter Rebbe born and tanya printed and tomchei tmimim founded", ["rebbe"])
+    s = assign_significance(r)
+    assert 0 <= s <= 100
+
+
+def test_apply_overrides_pins_score():
+    r = _r("Letter from Rebbe to a chossid", ["general"])
+    out = apply_overrides([r], {"x": 90})
+    assert out[0].significance == 90
 ```
 
 - [ ] **Step 2: Run to verify failure**
 
 ```bash
-cd ingest && uv run pytest tests/test_pass4_level.py -v && cd ..
+cd ingest && uv run pytest tests/test_pass4_significance.py -v && cd ..
 ```
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement level logic**
+- [ ] **Step 3: Implement significance logic**
 
 Create `ingest/src/timeline_ingest/pass4_enrich.py`:
 
 ```python
-"""Pass 4 — assign macro/meso/micro level, attach photos, build related[]."""
+"""Pass 4 — assign significance score (0–100), attach photos, build related[]."""
 
 import re
 from collections.abc import Iterable
 
-from timeline_ingest.schema import EventLevel, EventRecord
+from timeline_ingest.schema import EventRecord
 
-_MACRO_KEYWORDS = [
-    r"\bborn\b",
-    r"\bpasses away\b",
-    r"\bpassing\b",
-    r"\bbecame? .* rebbe\b",
-    r"\bbecomes? .* rebbe\b",
-    r"\barrest(ed)?\b",
-    r"\bexile(d)?\b",
-    r"\bredemption\b",
-    r"\btanya\b",
-    r"\blikkutei torah\b",
-    r"\btorah or\b",
-    r"\btomchei tmimim\b",
-]
-_MESO_KEYWORDS = [
-    r"\byeshiva\b",
-    r"\bfounded\b",
-    r"\bestablished\b",
-    r"\bpogrom\b",
-    r"\bwar\b",
-    r"\bmaamar\b",
-    r"\bsicha\b",
-    r"\bemigration\b",
-    r"\bfarbrengen\b",
+# Per-pattern point bumps; cap final score at 100.
+_PATTERN_SCORES: list[tuple[re.Pattern, int]] = [
+    (re.compile(r"\bborn\b", re.I), 35),
+    (re.compile(r"\bpasses away\b|\bpassing\b", re.I), 35),
+    (re.compile(r"\bbecame? .* rebbe\b|\bbecomes? .* rebbe\b", re.I), 35),
+    (re.compile(r"\barrest(ed)?\b|\bexile(d)?\b|\bredemption\b", re.I), 30),
+    (re.compile(r"\btanya\b|\blikkutei torah\b|\btorah or\b", re.I), 30),
+    (re.compile(r"\btomchei tmimim\b", re.I), 25),
+    (re.compile(r"\byeshiva\b|\bfounded\b|\bestablished\b", re.I), 20),
+    (re.compile(r"\bpogrom\b|\bwar\b", re.I), 20),
+    (re.compile(r"\bmaamar\b|\bsicha\b|\bfarbrengen\b", re.I), 15),
+    (re.compile(r"\bemigration\b", re.I), 15),
 ]
 
-_MACRO_RE = re.compile("|".join(_MACRO_KEYWORDS), re.IGNORECASE)
-_MESO_RE = re.compile("|".join(_MESO_KEYWORDS), re.IGNORECASE)
+# Floor (every event has *some* significance until proven otherwise)
+_BASE_SCORE = 15
+# Bonus when a Rebbe is explicitly tied to the event
+_REBBE_BONUS = 10
 
 
-def assign_level(rec: EventRecord) -> EventLevel:
+def assign_significance(rec: EventRecord) -> int:
     text = f"{rec.title_en} {rec.summary_en}".lower()
-    if _MACRO_RE.search(text):
-        return "macro"
-    if _MESO_RE.search(text):
-        return "meso"
-    if rec.category in {"rebbe"} and any(
-        kw in rec.title_en.lower() for kw in ["born", "passing", "becomes"]
-    ):
-        return "macro"
-    return "micro"
+    score = _BASE_SCORE
+    for pat, points in _PATTERN_SCORES:
+        if pat.search(text):
+            score += points
+    if rec.rebbe is not None:
+        score += _REBBE_BONUS
+    return max(0, min(100, score))
 
 
 def apply_overrides(
     records: Iterable[EventRecord],
-    overrides: dict[str, str],
+    overrides: dict[str, int],
 ) -> list[EventRecord]:
+    """Re-score every record. Manual `overrides[id]` wins; otherwise use the heuristic."""
     out: list[EventRecord] = []
     for r in records:
-        level = overrides.get(r.id) or assign_level(r)
-        out.append(r.model_copy(update={"level": level}))
+        score = overrides.get(r.id)
+        if score is None:
+            score = assign_significance(r)
+        out.append(r.model_copy(update={"significance": int(score)}))
     return out
 ```
 
 - [ ] **Step 4: Run tests**
 
 ```bash
-cd ingest && uv run pytest tests/test_pass4_level.py -v && cd ..
+cd ingest && uv run pytest tests/test_pass4_significance.py -v && cd ..
 ```
 
 Expected: PASS.
@@ -2374,8 +2422,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add ingest/src/timeline_ingest/pass4_enrich.py ingest/tests/test_pass4_level.py
-git commit -m "feat(ingest): pass4 level heuristic + manual overrides"
+git add ingest/src/timeline_ingest/pass4_enrich.py ingest/tests/test_pass4_significance.py
+git commit -m "feat(ingest): pass4 significance heuristic + manual overrides"
 ```
 
 ---
@@ -2407,12 +2455,12 @@ def test_build_entity_index_extracts_image_urls():
 
 def test_attach_photos_matches_by_title_token():
     rec = EventRecord(
-        id="x", level="macro",
+        id="x", significance=85,
         date=EventDate(y=1812, precision="year"),
         title_en="Alter Rebbe passes away",
         summary_en="",
         story_path="stories/x.md",
-        category="rebbe",
+        categories=["rebbe"],
         sources=[EventSource(name="t")],
     )
     idx = {
@@ -2524,11 +2572,11 @@ from timeline_ingest.schema import EventRecord, EventDate, EventSource
 
 def _r(id, y, title):
     return EventRecord(
-        id=id, level="micro",
+        id=id, significance=25,
         date=EventDate(y=y, precision="year"),
         title_en=title, summary_en="",
         story_path=f"stories/{id}.md",
-        category="general",
+        categories=["general"],
         sources=[EventSource(name="t")],
     )
 
@@ -2641,7 +2689,7 @@ def _cfg(tmp_path: Path) -> Config:
         output=OutputPaths(
             intermediate_dir=tmp_path / "intermediate", cache_dir=tmp_path / "cache",
             public_dir=tmp_path / "public", glossary_path=tmp_path / "g.yaml",
-            level_overrides_path=tmp_path / "l.yaml"),
+            significance_overrides_path=tmp_path / "l.yaml"),
     )
 
 
@@ -2649,20 +2697,20 @@ def test_run_pass4_emits_enriched(tmp_path: Path):
     cfg = _cfg(tmp_path)
     cfg.output.intermediate_dir.mkdir(parents=True)
     rec = EventRecord(
-        id="abc", level="micro",
+        id="abc", significance=0,
         date=EventDate(y=1812, precision="year"),
         title_en="Alter Rebbe passes away", summary_en="",
-        story_path="stories/abc.md", category="rebbe",
+        story_path="stories/abc.md", categories=["rebbe"],
         sources=[EventSource(name="t")],
     )
     p3 = cfg.output.intermediate_dir / "03_translated.json"
     p3.write_text(json.dumps([rec.model_dump(mode="json")]), encoding="utf-8")
-    cfg.output.level_overrides_path.write_text("overrides: {}\n", encoding="utf-8")
+    cfg.output.significance_overrides_path.write_text("overrides: {}\n", encoding="utf-8")
 
     out = run_pass4(cfg)
     assert out == cfg.output.intermediate_dir / "04_enriched.json"
     data = json.loads(out.read_text())
-    assert data[0]["level"] == "macro"  # heuristic should fire on "passes away"
+    assert data[0]["significance"] >= 80  # heuristic should fire on "passes away"
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -2691,7 +2739,7 @@ def run_pass4(cfg: Config) -> Path:
     rows = json.loads(p3.read_text(encoding="utf-8"))
     records = [EventRecord.model_validate(r) for r in rows]
 
-    overrides_doc = yaml.safe_load(cfg.output.level_overrides_path.read_text(encoding="utf-8")) or {}
+    overrides_doc = yaml.safe_load(cfg.output.significance_overrides_path.read_text(encoding="utf-8")) or {}
     overrides = overrides_doc.get("overrides", {})
 
     records = apply_overrides(records, overrides)
@@ -2777,7 +2825,7 @@ def _cfg(tmp_path):
         output=OutputPaths(
             intermediate_dir=tmp_path / "i", cache_dir=tmp_path / "c",
             public_dir=tmp_path / "p", glossary_path=tmp_path / "g",
-            level_overrides_path=tmp_path / "l"),
+            significance_overrides_path=tmp_path / "l"),
     )
 
 
@@ -2786,10 +2834,10 @@ def test_review_lists_only_macro(tmp_path: Path):
     cfg.output.intermediate_dir.mkdir(parents=True)
     import json
     payload = [
-        {"id": "m1", "level": "macro", "date": {"y": 1812, "precision": "year"},
-         "title_en": "Macro one", "summary_en": "s", "story_path": "p", "category": "rebbe", "sources": [{"name": "x"}], "related": []},
-        {"id": "x1", "level": "micro", "date": {"y": 1800, "precision": "year"},
-         "title_en": "Micro one", "summary_en": "s", "story_path": "p", "category": "general", "sources": [{"name": "x"}], "related": []},
+        {"id": "m1", "significance": 85, "date": {"y": 1812, "precision": "year"},
+         "title_en": "Macro one", "summary_en": "s", "story_path": "p", "categories": ["rebbe"], "sources": [{"name": "x"}], "related": []},
+        {"id": "x1", "significance": 25, "date": {"y": 1800, "precision": "year"},
+         "title_en": "Micro one", "summary_en": "s", "story_path": "p", "categories": ["general"], "sources": [{"name": "x"}], "related": []},
     ]
     (cfg.output.intermediate_dir / "04_enriched.json").write_text(json.dumps(payload))
     out = generate_review(cfg)
@@ -2831,7 +2879,7 @@ _TEMPLATE = """<!doctype html>
   .meta {{ color: #666; font-size: 0.9em; }}
 </style>
 <h1>Macro events ({n})</h1>
-<p>Review each. Edit <code>level_overrides.yaml</code> to re-level any event, then re-run pass4.</p>
+<p>Review each. Edit <code>significance_overrides.yaml</code> to re-level any event, then re-run pass4.</p>
 {events}
 """
 
@@ -2839,15 +2887,22 @@ _TEMPLATE = """<!doctype html>
 def generate_review(cfg: Config) -> Path:
     src = cfg.output.intermediate_dir / "04_enriched.json"
     rows = json.loads(src.read_text(encoding="utf-8"))
-    macro = [EventRecord.model_validate(r) for r in rows if r["level"] == "macro"]
+    macro = [
+        EventRecord.model_validate(r)
+        for r in rows
+        if int(r.get("significance", 0)) >= 80
+    ]
     macro.sort(key=lambda r: (r.date.y, r.date.m or 0, r.date.d or 0))
 
     blocks = []
     for r in macro:
+        cats = ",".join(r.categories)
         blocks.append(
             "<div class='event'>"
             f"<h3>{html.escape(r.title_en)}</h3>"
-            f"<div class='meta'>{r.date.y} · id={r.id} · category={r.category}</div>"
+            f"<div class='meta'>"
+            f"{r.date.y} · id={r.id} · significance={r.significance} · categories={cats}"
+            f"</div>"
             f"<p>{html.escape(r.summary_en)}</p>"
             "</div>"
         )
@@ -2914,7 +2969,7 @@ def _cfg(tmp_path):
         output=OutputPaths(
             intermediate_dir=tmp_path / "i", cache_dir=tmp_path / "c",
             public_dir=tmp_path / "p", glossary_path=tmp_path / "g",
-            level_overrides_path=tmp_path / "l"),
+            significance_overrides_path=tmp_path / "l"),
     )
 
 
@@ -2923,24 +2978,24 @@ def test_pass5_writes_events_and_stories(tmp_path):
     cfg.output.intermediate_dir.mkdir(parents=True)
     payload = [
         {
-            "id": "abc", "level": "macro",
+            "id": "abc", "significance": 85,
             "date": {"y": 1812, "precision": "year"},
             "title_en": "Alter Rebbe passes",
             "summary_en": "Summary.",
             "story_body": "Full story paragraph one. And paragraph two.",
             "story_path": "stories/abc.md",
-            "category": "rebbe",
+            "categories": ["rebbe"],
             "sources": [{"name": "x"}],
             "related": [],
         },
         {
-            "id": "xyz", "level": "micro",
+            "id": "xyz", "significance": 25,
             "date": {"y": 1813, "precision": "year"},
             "title_en": "Letter to a chossid",
             "summary_en": "Fallback summary text.",
             "story_body": None,
             "story_path": "stories/xyz.md",
-            "category": "general",
+            "categories": ["general"],
             "sources": [{"name": "x"}],
             "related": [],
         },
@@ -3115,10 +3170,10 @@ def test_lint_passes_for_valid(tmp_path):
     public = tmp_path / "public"
     (public / "stories").mkdir(parents=True)
     payload = [{
-        "id": "x", "level": "micro",
+        "id": "x", "significance": 25,
         "date": {"y": 1812, "precision": "year"},
         "title_en": "t", "summary_en": "s", "story_path": "stories/x.md",
-        "category": "general", "sources": [{"name": "x"}], "related": [],
+        "categories": ["general"], "sources": [{"name": "x"}], "related": [],
     }]
     _write(public / "events.json", payload)
     (public / "stories" / "x.md").write_text("# t\n")
@@ -3129,12 +3184,12 @@ def test_lint_fails_for_duplicate_ids(tmp_path):
     public = tmp_path / "public"
     (public / "stories").mkdir(parents=True)
     payload = [
-        {"id": "x", "level": "micro", "date": {"y": 1812, "precision": "year"},
+        {"id": "x", "significance": 25, "date": {"y": 1812, "precision": "year"},
          "title_en": "t", "summary_en": "s", "story_path": "stories/x.md",
-         "category": "general", "sources": [{"name": "x"}], "related": []},
-        {"id": "x", "level": "micro", "date": {"y": 1813, "precision": "year"},
+         "categories": ["general"], "sources": [{"name": "x"}], "related": []},
+        {"id": "x", "significance": 25, "date": {"y": 1813, "precision": "year"},
          "title_en": "t", "summary_en": "s", "story_path": "stories/x.md",
-         "category": "general", "sources": [{"name": "x"}], "related": []},
+         "categories": ["general"], "sources": [{"name": "x"}], "related": []},
     ]
     _write(public / "events.json", payload)
     (public / "stories" / "x.md").write_text("# t\n")
@@ -3146,9 +3201,9 @@ def test_lint_fails_for_orphan_related(tmp_path):
     public = tmp_path / "public"
     (public / "stories").mkdir(parents=True)
     payload = [{
-        "id": "x", "level": "micro", "date": {"y": 1812, "precision": "year"},
+        "id": "x", "significance": 25, "date": {"y": 1812, "precision": "year"},
         "title_en": "t", "summary_en": "s", "story_path": "stories/x.md",
-        "category": "general", "sources": [{"name": "x"}], "related": ["nope"],
+        "categories": ["general"], "sources": [{"name": "x"}], "related": ["nope"],
     }]
     _write(public / "events.json", payload)
     (public / "stories" / "x.md").write_text("# t\n")
@@ -3160,9 +3215,9 @@ def test_lint_fails_for_missing_story_file(tmp_path):
     public = tmp_path / "public"
     (public / "stories").mkdir(parents=True)
     payload = [{
-        "id": "x", "level": "micro", "date": {"y": 1812, "precision": "year"},
+        "id": "x", "significance": 25, "date": {"y": 1812, "precision": "year"},
         "title_en": "t", "summary_en": "s", "story_path": "stories/x.md",
-        "category": "general", "sources": [{"name": "x"}], "related": [],
+        "categories": ["general"], "sources": [{"name": "x"}], "related": [],
     }]
     _write(public / "events.json", payload)
     # no story file
@@ -3174,9 +3229,9 @@ def test_lint_fails_for_remote_photo_url(tmp_path):
     public = tmp_path / "public"
     (public / "stories").mkdir(parents=True)
     payload = [{
-        "id": "x", "level": "macro", "date": {"y": 1812, "precision": "year"},
+        "id": "x", "significance": 85, "date": {"y": 1812, "precision": "year"},
         "title_en": "t", "summary_en": "s", "story_path": "stories/x.md",
-        "category": "rebbe", "sources": [{"name": "x"}], "related": [],
+        "categories": ["rebbe"], "sources": [{"name": "x"}], "related": [],
         "photo": {"url": "https://example.org/p.jpg", "credit": "c"},
     }]
     _write(public / "events.json", payload)
@@ -3189,9 +3244,9 @@ def test_lint_fails_for_missing_photo_file(tmp_path):
     public = tmp_path / "public"
     (public / "stories").mkdir(parents=True)
     payload = [{
-        "id": "x", "level": "macro", "date": {"y": 1812, "precision": "year"},
+        "id": "x", "significance": 85, "date": {"y": 1812, "precision": "year"},
         "title_en": "t", "summary_en": "s", "story_path": "stories/x.md",
-        "category": "rebbe", "sources": [{"name": "x"}], "related": [],
+        "categories": ["rebbe"], "sources": [{"name": "x"}], "related": [],
         "photo": {"url": "photos/x.webp", "credit": "c"},
     }]
     _write(public / "events.json", payload)
@@ -3263,12 +3318,12 @@ def lint_emit(public_dir: Path) -> None:
         if not local.exists():
             raise LintError(f"event {r.id} photo file missing at {local}")
 
-    # Soft warnings (not failures): suspicious categorizations
+    # Soft warnings (not failures): suspicious significance/category combos
     for r in records:
-        if r.level == "macro" and r.category == "general":
-            print(f"WARN: event {r.id} is macro+general — review")
-        if r.level == "macro" and r.photo is None:
-            print(f"WARN: event {r.id} is macro but has no photo — review")
+        if r.significance >= 80 and r.categories == ["general"]:
+            print(f"WARN: event {r.id} is high-significance with only category=general — review")
+        if r.significance >= 80 and r.photo is None:
+            print(f"WARN: event {r.id} is high-significance but has no photo — review")
 ```
 
 - [ ] **Step 4: Call linter from pass5**
@@ -3404,7 +3459,7 @@ def _cfg(tmp_path: Path) -> Config:
         output=OutputPaths(
             intermediate_dir=tmp_path / "intermediate", cache_dir=tmp_path / "cache",
             public_dir=tmp_path / "public", glossary_path=tmp_path / "g.yaml",
-            level_overrides_path=tmp_path / "l.yaml"),
+            significance_overrides_path=tmp_path / "l.yaml"),
     )
 
 
@@ -3420,15 +3475,15 @@ def test_pass1_idempotent(tmp_path):
 def test_pass4_idempotent(tmp_path):
     cfg = _cfg(tmp_path)
     cfg.output.intermediate_dir.mkdir(parents=True)
-    cfg.output.level_overrides_path.write_text("overrides: {}\n", encoding="utf-8")
+    cfg.output.significance_overrides_path.write_text("overrides: {}\n", encoding="utf-8")
     payload = [{
-        "id": "abc", "level": "micro",
+        "id": "abc", "significance": 25,
         "date": {"y": 1812, "precision": "year"},
         "title_en": "Alter Rebbe passes away",
         "summary_en": "",
         "story_body": None,
         "story_path": "stories/abc.md",
-        "category": "rebbe",
+        "categories": ["rebbe"],
         "sources": [{"name": "t"}], "related": [],
     }]
     (cfg.output.intermediate_dir / "03_translated.json").write_text(json.dumps(payload))
@@ -3443,13 +3498,13 @@ def test_pass5_idempotent_without_photos(tmp_path):
     cfg = _cfg(tmp_path)
     cfg.output.intermediate_dir.mkdir(parents=True)
     payload = [{
-        "id": "abc", "level": "macro",
+        "id": "abc", "significance": 85,
         "date": {"y": 1812, "precision": "year"},
         "title_en": "Alter Rebbe passes",
         "summary_en": "Summary.",
         "story_body": "Full story text.",
         "story_path": "stories/abc.md",
-        "category": "rebbe",
+        "categories": ["rebbe"],
         "sources": [{"name": "t"}], "related": [],
     }]
     (cfg.output.intermediate_dir / "04_enriched.json").write_text(json.dumps(payload))
@@ -3527,7 +3582,7 @@ Expected: <5 minutes. `intermediate/04_enriched.json` written.
 cd ingest && make review
 ```
 
-Expected: `intermediate/review.html` opens with ~50–80 macro events. Manually review; edit `level_overrides.yaml` for any re-leveling.
+Expected: `intermediate/review.html` opens with ~50–80 macro events. Manually review; edit `significance_overrides.yaml` for any re-leveling.
 
 - [ ] **Step 7: Re-run pass4 if overrides changed**
 
