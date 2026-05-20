@@ -1,0 +1,48 @@
+# Absolute paths to every source corpus on disk.
+# All paths are read-only; this pipeline never writes to them.
+
+existing_extractions:
+  compact_json: /home/chassidusaicon/code/nanoclaw/groups/whatsapp_main/chabad-timeline-compact.json
+  comprehensive_md: /home/chassidusaicon/code/nanoclaw/groups/whatsapp_main/chabad-history-timeline-comprehensive.md
+  chabadpedia_kg_dir: /home/chassidusaicon/code/nanoclaw/groups/whatsapp_main/chabadpedia-web
+
+books_to_extract:
+  undaunted_dir: /home/chassidusaicon/code/nanoclaw/groups/whatsapp_main
+  undaunted_chapters_glob: "undaunted_chapter*.txt"
+  chabad_library_dir: /home/chassidusaicon/code/nanoclaw/groups/whatsapp_main/chabad-library-clean-books
+  chabad_library_history_book_ids:
+    # All 17 books from the Misaviv L'Chassidus category.
+    - "6300000000"  # מאסר וגאולת אדמו"ר האמצעי
+    - "5100000000"  # תולדות אברהם חיים
+    - "5200000000"  # תולדות חב"ד בארץ הקודש
+    - "6800000000"  # תולדות חב"ד ברוסיה הצארית
+    - "7000000000"  # תולדות חב"ד בפולין, ליטא ולטביא
+    - "5300000000"  # זכרון לבני ישראל
+    - "5500000000"  # למען ידעו בנים יוולדו
+    - "5800000000"  # זכרונותי
+    - "6200000000"  # ליובאוויטש
+    - "6900000000"  # מבית הגנזים
+    - "7800000000"  # תערוכות הספריה
+    - "7900000000"  # יומן השליחות המיוחדת
+    - "11200000469"  # עבודת הקודש
+    - "11200003993"  # בכל ביתי נאמן הוא
+    - "11200004131"  # אדמו"רי חב"ד ויהדות בוכרה
+    - "11200004207"  # אדמו"רי חב"ד ויהדות אוסטריה
+    - "11200004103"  # אדמו"רי חב"ד ויהדות גרמניה
+
+chabadpedia_pages:
+  dir: /home/chassidusaicon/code/nanoclaw/groups/whatsapp_main/chabadpedia-web/pages
+
+photos:
+  knowledge_graph_files:
+    - rebbes: /home/chassidusaicon/code/nanoclaw/groups/whatsapp_main/chabadpedia-web/chabadpedia_knowledge_graph_rebbes.json
+    - people: /home/chassidusaicon/code/nanoclaw/groups/whatsapp_main/chabadpedia-web/chabadpedia_knowledge_graph_people.json
+    - places: /home/chassidusaicon/code/nanoclaw/groups/whatsapp_main/chabadpedia-web/chabadpedia_knowledge_graph_places.json
+    - publications: /home/chassidusaicon/code/nanoclaw/groups/whatsapp_main/chabadpedia-web/chabadpedia_knowledge_graph_publications.json
+
+output:
+  intermediate_dir: intermediate
+  cache_dir: cache
+  public_dir: ../public
+  glossary_path: glossary.yaml
+  significance_overrides_path: significance_overrides.yaml
