@@ -3547,7 +3547,7 @@ Expected: `public/events.json + public/stories/<id>.md` written; linter passes.
 
 ```bash
 cd /home/chassidusaicon/code/master-timeline-chabad
-git add public/events.json public/stories/
+git add public/events.json public/stories/ public/photos/
 git commit -m "data: ingest run $(date +%Y-%m-%d) — full corpus emit"
 ```
 
