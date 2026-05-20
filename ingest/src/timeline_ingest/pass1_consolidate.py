@@ -59,20 +59,72 @@ def load_compact_json(path: Path) -> list[EventRecord]:
     return out
 
 
-_EVENT_RE = re.compile(
+_EVENT_ERA_RE = re.compile(
     r"^-\s*\*\*(\d{4}):\*\*\s*(.+?)$\n(?:\s*-\s*_(.+?)_)?",
     re.MULTILINE,
 )
+
+_YEAR_HEADING_RE = re.compile(r"^###\s+(\d{4})\s*$", re.MULTILINE)
+_YEAR_ENTRY_RE = re.compile(r"^-\s+\*\*(.+?)\*\*\s*\n((?:  -.*\n?)*)", re.MULTILINE)
+
+
+def _parse_era_section(text: str) -> list[tuple[int, str, str]]:
+    """Return (year, title_he, summary_he) tuples from the Events by Era section."""
+    results = []
+    for m in _EVENT_ERA_RE.finditer(text):
+        year = int(m.group(1))
+        title_he = m.group(2).strip()
+        summary_he = (m.group(3) or "").strip()
+        results.append((year, title_he, summary_he))
+    return results
+
+
+def _parse_year_section(text: str) -> list[tuple[int, str, str]]:
+    """Return (year, title_he, summary_he) tuples from the Events by Year section.
+
+    That section uses:
+        ### YYYY
+        - **title**
+          - Category: <cat>
+          - <description text>
+          - Source: <source>
+    """
+    section_marker = "## Events by Year"
+    start = text.find(section_marker)
+    if start < 0:
+        return []
+    section_text = text[start:]
+
+    results = []
+    year_matches = list(_YEAR_HEADING_RE.finditer(section_text))
+    for i, ym in enumerate(year_matches):
+        year = int(ym.group(1))
+        block_start = ym.end()
+        block_end = year_matches[i + 1].start() if i + 1 < len(year_matches) else len(section_text)
+        block = section_text[block_start:block_end]
+        for entry in _YEAR_ENTRY_RE.finditer(block):
+            title_he = entry.group(1).strip()
+            detail_block = entry.group(2)
+            summary_he = ""
+            for dl in detail_block.splitlines():
+                stripped = dl.strip().lstrip("- ").strip()
+                if stripped and not stripped.startswith("Category:") and not stripped.startswith("Source:"):
+                    summary_he = stripped
+                    break
+            results.append((year, title_he, summary_he))
+    return results
 
 
 def load_comprehensive_md(path: Path) -> list[EventRecord]:
     text = path.read_text(encoding="utf-8")
     seen: set[str] = set()
     out: list[EventRecord] = []
-    for m in _EVENT_RE.finditer(text):
-        year = int(m.group(1))
-        title_he = m.group(2).strip()
-        summary_he = (m.group(3) or "").strip()
+
+    all_entries: list[tuple[int, str, str]] = []
+    all_entries.extend(_parse_era_section(text))
+    all_entries.extend(_parse_year_section(text))
+
+    for year, title_he, summary_he in all_entries:
         try:
             date = parse_year_only(year)
         except ValueError:
