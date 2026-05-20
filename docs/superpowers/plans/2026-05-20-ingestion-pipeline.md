@@ -1868,8 +1868,11 @@ from timeline_ingest.config import Config, ExistingExtractions, BooksToExtract, 
 
 
 async def fake_call(client, *, system, user, model):
-    return '[{"title": "Fake event " + str(hash(user) % 100), "year": 1800, "month": null, "day": null, "category": "general", "summary": "x", "story": "y"}]'.replace(
-        '" + str(hash(user) % 100)', ""
+    # Vary title per chunk so events from different sources don't dedupe to the same id.
+    suffix = abs(hash(user)) % 10_000
+    return (
+        f'[{{"title": "Fake event {suffix}", "year": 1800, "month": null, "day": null, '
+        f'"category": "general", "summary": "x", "story": "y"}}]'
     )
 
 
@@ -1936,20 +1939,28 @@ from timeline_ingest.config import Config
 
 
 async def run_pass2(cfg: Config, *, _call_override=None) -> Path:
+    """Run extraction across all configured sources.
+
+    On duplicate event_id (same event surfacing from multiple sources), we MERGE
+    the sources lists instead of dropping the second occurrence — preserves
+    provenance and matches Pass 1's consolidate() behavior.
+    """
     client = LLMClient(cache_dir=cfg.output.cache_dir, _call=_call_override)
-    all_records: list[EventRecord] = []
-    seen: set[str] = set()
+    records_by_id: dict[str, EventRecord] = {}
+
+    def _ingest(recs: list[EventRecord]) -> None:
+        for r in recs:
+            if r.id in records_by_id:
+                records_by_id[r.id].sources.extend(r.sources)
+            else:
+                records_by_id[r.id] = r
 
     # Undaunted chapters
     chapter_paths = sorted(cfg.books_to_extract.undaunted_dir.glob(
         cfg.books_to_extract.undaunted_chapters_glob
     ))
     for ch in chapter_paths:
-        recs = await extract_book(client, ch, source_name="Undaunted")
-        for r in recs:
-            if r.id not in seen:
-                seen.add(r.id)
-                all_records.append(r)
+        _ingest(await extract_book(client, ch, source_name="Undaunted"))
 
     # Chabad Library history books
     for book_id in cfg.books_to_extract.chabad_library_history_book_ids:
@@ -1957,30 +1968,20 @@ async def run_pass2(cfg: Config, *, _call_override=None) -> Path:
         if not candidates:
             continue
         book_path = candidates[0]
-        recs = await extract_book(client, book_path, source_name=f"Chabad Library/{book_id}")
-        for r in recs:
-            if r.id not in seen:
-                seen.add(r.id)
-                all_records.append(r)
+        _ingest(await extract_book(client, book_path, source_name=f"Chabad Library/{book_id}"))
 
     # Chabadpedia biographical pages
     pages_dir = cfg.chabadpedia_pages.dir
     if pages_dir.exists():
         for page_path in sorted(pages_dir.glob("*.txt")) + sorted(pages_dir.glob("*.json")):
-            recs = await extract_book(
-                client,
-                page_path,
-                source_name=f"Chabadpedia/{page_path.stem}",
-            )
-            for r in recs:
-                if r.id not in seen:
-                    seen.add(r.id)
-                    all_records.append(r)
+            _ingest(await extract_book(
+                client, page_path, source_name=f"Chabadpedia/{page_path.stem}"
+            ))
 
     out_dir = cfg.output.intermediate_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "02_extracted.json"
-    payload = [r.model_dump(mode="json") for r in all_records]
+    payload = [r.model_dump(mode="json") for r in records_by_id.values()]
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return out_path
 ```
@@ -2456,7 +2457,7 @@ def _build_entity_index(kg: dict) -> dict[str, EventPhoto]:
     return out
 
 
-_TOKEN_RE = re.compile(r"[\w֐-׿]+", re.UNICODE)
+_TOKEN_RE = re.compile(r"[\w\u0590-\u05FF]+", re.UNICODE)
 
 
 def _tokenize(text: str) -> set[str]:
