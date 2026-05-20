@@ -123,12 +123,15 @@ def test_empty_id_raises():
         )
 
 
-def test_empty_title_raises():
-    with pytest.raises(ValidationError):
-        EventRecord(
-            id="x", significance=10,
-            date=EventDate(y=1812, precision="year"),
-            title_en="",  # empty
-            summary_en="s", story_path="p",
-            categories=["rebbe"], sources=[],
-        )
+def test_empty_title_allowed_for_intermediate_passes():
+    """Pass 1/Pass 2 records may have empty title_en — Pass 3 fills English.
+    The non-empty constraint at emit time is enforced by the Pass 5 linter, not the schema."""
+    record = EventRecord(
+        id="x", significance=10,
+        date=EventDate(y=1812, precision="year"),
+        title_en="",          # empty is allowed (intermediate stage)
+        summary_en="",         # empty is allowed
+        story_path="p",
+        categories=["rebbe"], sources=[],
+    )
+    assert record.title_en == ""

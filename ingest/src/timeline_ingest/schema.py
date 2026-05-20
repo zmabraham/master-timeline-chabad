@@ -71,13 +71,22 @@ class EventSource(_StrictModel):
 
 
 class EventRecord(_StrictModel):
+    """An event in the timeline.
+
+    Intermediate-stage contract: ``title_en`` and ``summary_en`` MAY be empty
+    strings in Pass 1 / Pass 2 outputs — Pass 3 fills English for any Hebrew-only
+    record. Pass 5's emit-time linter is the authoritative gate that enforces
+    non-empty title/summary on the final ``events.json``. ``id`` and ``story_path``
+    are identity/location fields and must be non-empty at every stage.
+    """
+
     id: str = Field(min_length=1)
     significance: int = Field(ge=0, le=100)
     date: EventDate
     hebrew_date: HebrewDate | None = None
-    title_en: str = Field(min_length=1)
-    summary_en: str = Field(min_length=1)
-    story_body: str | None = None         # 2-4 sentence full story; written to stories/<id>.md by Pass 5
+    title_en: str                          # may be "" during Pass 1/2; filled by Pass 3
+    summary_en: str                        # may be "" if a source row has no description
+    story_body: str | None = None          # 2-4 sentence full story; written to stories/<id>.md by Pass 5
     story_path: str = Field(min_length=1)
     categories: list[EventCategory] = Field(min_length=1)
     tags: list[str] = Field(default_factory=list)
