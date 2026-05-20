@@ -14,7 +14,7 @@ Several partial extractions already exist on disk (3,716-event compact JSON, 4,2
 
 ## Solution
 
-A static web app — `master-timeline-chabad` — built around vis-timeline with clustering, fed by a one-time English-language ingestion pipeline that consolidates the existing extractions and adds fresh LLM extraction over *Undaunted*, the 17 Chabad Library history books, and Chabadpedia biographical pages. Every event is tagged macro / meso / micro; the UI renders the appropriate level for the current zoom; clicking an event opens a side panel with the full markdown story body, Gregorian + Hebrew dates, photo (when available from Chabadpedia), sources, and related events.
+A static web app — `master-timeline-chabad` — built around vis-timeline with clustering, fed by a one-time English-language ingestion pipeline that consolidates the existing extractions and adds fresh LLM extraction over *Undaunted*, the 17 Chabad Library history books, and Chabadpedia biographical pages. Every event carries a numeric `significance` score (0–100); the UI bins to macro / meso / micro by zoom and renders the appropriate density. Clicking an event opens a side panel with the full markdown story body, Gregorian + Hebrew dates, photo (when available from Chabadpedia), sources, and related events.
 
 ## Architecture
 
@@ -179,10 +179,10 @@ Python, run offline, five idempotent passes. Each pass is incremental and resuma
 - Glossary file: `ingest/glossary.yaml`. Locked vocabulary — the LLM is instructed to use exactly these renderings (e.g., "Alter Rebbe" not "Old Rebbe").
 - **Output:** `ingest/intermediate/03_translated.json`.
 
-### Pass 4 — Level + photo + cross-reference
+### Pass 4 — Significance + photo + cross-reference
 
-- Apply level heuristic (see Data Model).
-- Apply `level_overrides.yaml`.
+- Apply significance heuristic (see Data Model).
+- Apply `significance_overrides.yaml`.
 - For each event, attempt to attach a `photo` from the Chabadpedia knowledge graph when the event references a person/place/publication entity.
 - Build `related[]` by Jaccard similarity on entity-mention sets within ±20 years.
 - **Output:** `ingest/intermediate/04_enriched.json`.
@@ -197,7 +197,7 @@ Python, run offline, five idempotent passes. Each pass is incremental and resuma
 
 ### Manual review checkpoint
 
-Between Pass 4 and Pass 5, the pipeline emits `ingest/review.html` listing all macro-level events with title, date, summary, and an inline "approve / edit level / drop" UI. Maintainer reviews macro events for accuracy before Pass 5 emits the final artifacts. Meso/micro are not reviewed manually in v1 (scale prohibits it).
+Between Pass 4 and Pass 5, the pipeline emits `ingest/review.html` listing all events with `significance ≥ 80` (the macro bin) with title, date, summary, and an inline "approve / edit significance / drop" UI. Maintainer reviews these for accuracy before Pass 5 emits the final artifacts. Meso/micro (significance < 80) are not reviewed manually in v1 (scale prohibits it).
 
 ### Cost & runtime estimates
 
@@ -220,7 +220,7 @@ Between Pass 4 and Pass 5, the pipeline emits `ingest/review.html` listing all m
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  [Search ─────────]   [Rebbe ▾] [Category ▾] [Level ▾]   [About ⓘ] │
+│  [Search ─]  [Group-by ▾] [Rebbe ▾] [Cat ▾] [Tag ▾] [Sig ▾]  [ⓘ] │
 ├─────────────────────────────────────────────────────────────────────┤
 │ Besht       │█████│                                                 │
 │ Magid       │     │██│                                              │
@@ -336,7 +336,7 @@ The group-strip auto-scrolls when there are too many lanes for the viewport heig
 ### Ingestion pipeline
 
 - **Schema validation** — Pydantic `EventRecord` model validates every emit. Pipeline fails loudly if a record violates schema.
-- **Golden-file tests** — A fixed 50-event sample drawn from the existing data exercises each pass (consolidate, dedupe, normalize, level-assign). Output is diffed against committed golden JSON.
+- **Golden-file tests** — A fixed 50-event sample drawn from the existing data exercises each pass (consolidate, dedupe, normalize, significance-assign). Output is diffed against committed golden JSON.
 - **Idempotency test** — Re-running each pass against the previous pass's output must produce identical bytes (modulo cache hits).
 - **Sampling review** — After Pass 4, the pipeline emits a 100-event random sample report for manual sanity-check before macro-event review.
 
@@ -400,7 +400,7 @@ master-timeline-chabad/
 │   ├── index.html
 │   ├── src/
 │   │   ├── main.ts
-│   │   ├── timeline.ts         # vis-timeline setup + zoom→level
+│   │   ├── timeline.ts         # vis-timeline setup + zoom→significance binning
 │   │   ├── search.ts           # Lunr integration
 │   │   ├── filters.ts
 │   │   ├── panel.ts            # side-panel rendering
