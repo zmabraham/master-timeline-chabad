@@ -132,3 +132,40 @@ def build_related(records: list[EventRecord], *, window: int = 20, top_k: int = 
         related_ids = [oid for _, oid in candidates[:top_k]]
         out.append(r.model_copy(update={"related": related_ids}))
     return out
+
+
+import json
+from pathlib import Path
+
+import yaml
+
+from timeline_ingest.config import Config
+
+
+def run_pass4(cfg: Config) -> Path:
+    p3 = cfg.output.intermediate_dir / "03_translated.json"
+    rows = json.loads(p3.read_text(encoding="utf-8"))
+    records = [EventRecord.model_validate(r) for r in rows]
+
+    overrides_doc = yaml.safe_load(cfg.output.significance_overrides_path.read_text(encoding="utf-8")) or {}
+    overrides = overrides_doc.get("overrides", {})
+
+    records = apply_overrides(records, overrides)
+
+    entity_index: dict[str, EventPhoto] = {}
+    for entry in cfg.photos.knowledge_graph_files:
+        for _, path in entry.items():
+            if not path.exists():
+                continue
+            kg = json.loads(path.read_text(encoding="utf-8"))
+            entity_index.update(_build_entity_index(kg))
+
+    records = attach_photos(records, entity_index=entity_index)
+    records = build_related(records, window=20)
+
+    out_path = cfg.output.intermediate_dir / "04_enriched.json"
+    out_path.write_text(
+        json.dumps([r.model_dump(mode="json") for r in records], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return out_path
