@@ -45,3 +45,20 @@ def test_is_supported_year_accepts_modern():
 def test_is_supported_year_rejects_out_of_range():
     assert not is_supported_year(1200)
     assert not is_supported_year(2200)
+
+
+def test_parse_iso_partial_out_of_range_year_raises():
+    with pytest.raises(ValueError, match="out of supported range"):
+        parse_iso_partial("1200-03-15")
+
+
+def test_parse_iso_partial_invalid_month_raises():
+    # Pydantic validates month 1..12 via Field(ge=1, le=12); accept either ValueError
+    # or pydantic.ValidationError (the latter subclasses ValueError in Pydantic v2).
+    with pytest.raises(Exception):
+        parse_iso_partial("1812-13-01")
+
+
+def test_parse_iso_partial_invalid_day_raises():
+    with pytest.raises(Exception):
+        parse_iso_partial("1812-03-32")

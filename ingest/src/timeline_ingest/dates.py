@@ -33,6 +33,8 @@ def parse_iso_partial(s: str) -> EventDate:
     if not m:
         raise ValueError(f"not an iso date: {s!r}")
     y = int(m.group(1))
+    if not is_supported_year(y):
+        raise ValueError(f"year {y} out of supported range")
     month = int(m.group(2)) if m.group(2) else None
     day = int(m.group(3)) if m.group(3) else None
     if day is not None:
