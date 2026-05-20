@@ -8,15 +8,21 @@ from pathlib import Path
 from timeline_ingest.config import load_config
 from timeline_ingest.pass1_consolidate import consolidate
 from timeline_ingest.pass2_extract import run_pass2
+from timeline_ingest.pass3_translate import run_pass3
 
 
 def _pass2_sync(cfg):
     return asyncio.run(run_pass2(cfg))
 
 
+def _pass3_sync(cfg):
+    return asyncio.run(run_pass3(cfg))
+
+
 PASSES = {
     "pass1": consolidate,
     "pass2": _pass2_sync,
+    "pass3": _pass3_sync,
 }
 
 
