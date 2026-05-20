@@ -10,6 +10,7 @@ from timeline_ingest.pass1_consolidate import consolidate
 from timeline_ingest.pass2_extract import run_pass2
 from timeline_ingest.pass3_translate import run_pass3
 from timeline_ingest.pass4_enrich import run_pass4
+from timeline_ingest.review import generate_review
 
 
 def _pass2_sync(cfg):
@@ -25,6 +26,7 @@ PASSES = {
     "pass2": _pass2_sync,
     "pass3": _pass3_sync,
     "pass4": run_pass4,
+    "review": generate_review,
 }
 
 
