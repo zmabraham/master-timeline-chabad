@@ -10,3 +10,10 @@ data/
 # Ingestion intermediates (large; built locally, not committed)
 ingest/cache/
 ingest/intermediate/
+
+# Virtual env
+ingest/.venv/
+
+# Python bytecode
+**/__pycache__/
+**/*.pyc
