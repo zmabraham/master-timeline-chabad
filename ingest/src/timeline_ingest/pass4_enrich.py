@@ -104,3 +104,31 @@ def attach_photos(
                 break
         out.append(r.model_copy(update={"photo": photo}))
     return out
+
+
+def _tokens(rec: EventRecord) -> set[str]:
+    text = f"{rec.title_en} {rec.summary_en}".lower()
+    return {t for t in re.findall(r"[a-z]{4,}", text)}
+
+
+def build_related(records: list[EventRecord], *, window: int = 20, top_k: int = 5) -> list[EventRecord]:
+    tokens_by_id: dict[str, set[str]] = {r.id: _tokens(r) for r in records}
+    out: list[EventRecord] = []
+    for r in records:
+        candidates: list[tuple[float, str]] = []
+        for other in records:
+            if other.id == r.id:
+                continue
+            if abs(other.date.y - r.date.y) > window:
+                continue
+            t1 = tokens_by_id[r.id]
+            t2 = tokens_by_id[other.id]
+            if not t1 or not t2:
+                continue
+            jaccard = len(t1 & t2) / len(t1 | t2)
+            if jaccard > 0.1:
+                candidates.append((jaccard, other.id))
+        candidates.sort(reverse=True)
+        related_ids = [oid for _, oid in candidates[:top_k]]
+        out.append(r.model_copy(update={"related": related_ids}))
+    return out
