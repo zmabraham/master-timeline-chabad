@@ -20,7 +20,9 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 from collections.abc import Callable
+from datetime import datetime, timedelta
 from pathlib import Path
 
 
@@ -96,14 +98,45 @@ async def _sdk_call(client: LLMClient, *, system: str, user: str, model: str) ->
 
 _CLI_MAX_BUDGET_USD = 5.0  # per-call belt-and-suspenders cap
 
-# When `claude --print` errors with a rate-limit / usage-limit signal, sleep
-# this long before retrying. Max's window is 5 hours; we conservatively wait
-# 90 minutes so we don't burn through quota in a tight retry loop, and we
-# don't park forever in case the limit was a transient blip.
-_CLI_RATELIMIT_SLEEP_S = 90 * 60
-# Cap retries on persistent rate limits — eventually surface the failure
-# rather than spinning silently for days.
-_CLI_RATELIMIT_MAX_RETRIES = 6
+# Default sleep when we hit a rate-limit-flavored error but can't parse a
+# specific reset time. Kept short so we ride window resets quickly rather
+# than parking through them.
+_CLI_RATELIMIT_DEFAULT_SLEEP_S = 10 * 60
+# Hard cap on any single sleep — even with parsed reset times, don't park
+# longer than this (something is wrong if the reset is hours out).
+_CLI_RATELIMIT_MAX_SLEEP_S = 6 * 3600
+_CLI_RATELIMIT_MAX_RETRIES = 12
+
+
+_RESET_TIME_RE = re.compile(
+    r"resets\s+(?P<h>\d{1,2}):(?P<m>\d{2})\s*(?P<ampm>am|pm)",
+    re.IGNORECASE,
+)
+
+
+def _parse_reset_sleep_seconds(error_text: str) -> int | None:
+    """If the error text contains 'resets HH:MM(am|pm)', compute seconds until
+    that time (in the local timezone), plus a small buffer. Returns None if
+    no parse."""
+    m = _RESET_TIME_RE.search(error_text)
+    if not m:
+        return None
+    h = int(m.group("h"))
+    minute = int(m.group("m"))
+    ampm = m.group("ampm").lower()
+    # 12am = midnight, 12pm = noon
+    if ampm == "am":
+        h = 0 if h == 12 else h
+    else:
+        h = 12 if h == 12 else h + 12
+
+    now = datetime.now()
+    target = now.replace(hour=h, minute=minute, second=0, microsecond=0)
+    # If the target has already passed today, it's tomorrow.
+    if target <= now:
+        target = target + timedelta(days=1)
+    seconds = int((target - now).total_seconds()) + 60  # 60s buffer
+    return max(seconds, 60)
 
 
 def _is_rate_limit_error(envelope: dict, stderr_text: str = "") -> bool:
@@ -158,13 +191,23 @@ async def _cli_call(client: LLMClient, *, system: str, user: str, model: str) ->
             last_err = f"rc={proc.returncode} result={envelope.get('result', '<none>')!r} stderr={stderr_text[:200]!r}"
             if _is_rate_limit_error(envelope, stderr_text):
                 if attempt < _CLI_RATELIMIT_MAX_RETRIES:
+                    # Try to parse "resets HH:MMam/pm" from the error so we
+                    # wake up just after the window actually resets, rather
+                    # than sleeping a fixed-and-possibly-wrong duration.
+                    error_text = (
+                        str(envelope.get("result", "")) + " " + stderr_text
+                    )
+                    parsed = _parse_reset_sleep_seconds(error_text)
+                    sleep_s = parsed if parsed is not None else _CLI_RATELIMIT_DEFAULT_SLEEP_S
+                    sleep_s = min(sleep_s, _CLI_RATELIMIT_MAX_SLEEP_S)
                     print(
                         f"[llm] rate-limit hit (attempt {attempt + 1}/"
-                        f"{_CLI_RATELIMIT_MAX_RETRIES + 1}); sleeping "
-                        f"{_CLI_RATELIMIT_SLEEP_S}s then retrying. signal={last_err[:200]}",
+                        f"{_CLI_RATELIMIT_MAX_RETRIES + 1}); "
+                        f"sleeping {sleep_s}s ({'parsed reset time' if parsed else 'default'}) "
+                        f"then retrying. signal={last_err[:200]}",
                         flush=True,
                     )
-                    await asyncio.sleep(_CLI_RATELIMIT_SLEEP_S)
+                    await asyncio.sleep(sleep_s)
                     continue
             # Non-rate-limit error, or out of retries: raise.
             raise RuntimeError(f"claude failed: {last_err}")
