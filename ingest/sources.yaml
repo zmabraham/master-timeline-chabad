@@ -17,7 +17,7 @@ books_to_extract:
     - "תולדות_אברהם_חיים"                       # Toldos Avraham Chaim
     - "תולדות_חב״ד_בארץ_הקודש"                  # Chabad in the Holy Land
     - "תולדות_חב״ד_ברוסיה"                       # Chabad in Tsarist Russia
-    - "תולדות_חב״ד_בפולין_ליטא_ולטביא"          # Chabad in Poland/Lithuania/Latvia
+    - "תולדות_חבד_בפולין_HISTORY"               # Chabad in Poland/Lithuania/Latvia (corrected — file at the original Hebrew stem was Shulchan Aruch text, not this book; corrected version pulled from user's Google Doc 1Qz9iF_urpnf4BJGpsFfgV-W5XF0JepUJ0eacHY6jxyc on 2026-05-21)
     - "זכרון_לבני_ישראל"                         # Zikhron Livnei Yisrael
     - "למען_ידעו_בנים"                           # L'maan Yedu Banim
     - "זכרונותי"                                 # Memoirs
