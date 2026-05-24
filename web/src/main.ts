@@ -2,6 +2,7 @@ import { loadEvents } from './data';
 import { buildTimeline } from './timeline';
 import { buildPanel } from './panel';
 import { buildSearch } from './search';
+import { initialFilters, applyFilters, buildFilterBar } from './filters';
 import './styles.css';
 import 'vis-timeline/styles/vis-timeline-graph2d.min.css';
 
@@ -28,13 +29,24 @@ app.innerHTML = `
     },
   );
 
+  const filters = initialFilters();
+  const filtersHost = document.createElement('div');
+  filtersHost.id = 'filters';
+  document.querySelector('header')!.appendChild(filtersHost);
+
   const searchEl = document.getElementById('search') as HTMLInputElement;
   let debounce: number | undefined;
+
+  function refresh() {
+    const searchMatches = search.query(searchEl.value);
+    const filtered = applyFilters(events, filters).filter((e) => searchMatches.has(e.id));
+    tl.refresh(filtered);
+  }
+
+  buildFilterBar(filtersHost, filters, refresh);
+
   searchEl.addEventListener('input', () => {
     clearTimeout(debounce);
-    debounce = window.setTimeout(() => {
-      const matches = search.query(searchEl.value);
-      tl.refresh(events.filter((e) => matches.has(e.id)));
-    }, 200);
+    debounce = window.setTimeout(refresh, 200);
   });
 })();

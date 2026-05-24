@@ -29,3 +29,11 @@ aside#panel.open { transform: translateX(0); }
 
 header { display: flex; align-items: center; gap: 1rem; }
 #search { flex: 1; max-width: 400px; padding: 0.5rem 0.8rem; border: 1px solid #ccc; border-radius: 4px; font-size: 1rem; }
+
+header { flex-wrap: wrap; }
+#filters { display: flex; gap: 1.2rem; flex-basis: 100%; padding-top: 0.6rem; }
+.filter-group { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.filter-label { font-size: 0.85rem; color: #555; font-weight: 600; }
+.filter-chips { display: flex; gap: 0.2rem; flex-wrap: wrap; }
+.chip { padding: 0.2rem 0.6rem; background: #f0f0f0; border: 1px solid #ddd; border-radius: 999px; font-size: 0.8rem; cursor: pointer; }
+.chip.active { background: #2563eb; color: white; border-color: #2563eb; }
