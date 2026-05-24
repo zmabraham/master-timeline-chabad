@@ -57,6 +57,17 @@ def _row_to_record(row: dict, *, source_name: str) -> EventRecord | None:
     month = row.get("month") if isinstance(row.get("month"), int) else None
     day = row.get("day") if isinstance(row.get("day"), int) else None
 
+    # Enforce precision invariants: a day with no month, or any other partial,
+    # would trip EventDate's inverse-precision validator. Drop sub-fields the
+    # LLM provided when their parent is missing.
+    if month is None:
+        day = None
+    if month is not None and not (1 <= month <= 12):
+        month = None
+        day = None
+    if day is not None and not (1 <= day <= 31):
+        day = None
+
     raw_cats = row.get("categories") or row.get("category") or ["general"]
     if isinstance(raw_cats, str):
         raw_cats = [raw_cats]
@@ -68,7 +79,14 @@ def _row_to_record(row: dict, *, source_name: str) -> EventRecord | None:
     tags = [t.lower().strip() for t in raw_tags if isinstance(t, str) and t.strip()]
 
     precision = "day" if (month and day) else ("month" if month else "year")
-    date = EventDate(y=year, m=month, d=day, precision=precision)
+    # Build EventDate with only the fields the chosen precision allows, so the
+    # schema's inverse-precision validator never sees stray m/d.
+    if precision == "day":
+        date = EventDate(y=year, m=month, d=day, precision="day")
+    elif precision == "month":
+        date = EventDate(y=year, m=month, precision="month")
+    else:
+        date = EventDate(y=year, precision="year")
     eid = event_id(title, year=year, month=month, day=day)
     story_body = (row.get("story") or "").strip() or None
     return EventRecord(
