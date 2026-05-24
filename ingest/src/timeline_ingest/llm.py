@@ -109,20 +109,21 @@ _CLI_RATELIMIT_MAX_RETRIES = 12
 
 
 _RESET_TIME_RE = re.compile(
-    r"resets\s+(?P<h>\d{1,2}):(?P<m>\d{2})\s*(?P<ampm>am|pm)",
+    # Accept "9pm", "9:30pm", "12 am", etc. — minutes are optional.
+    r"resets\s+(?P<h>\d{1,2})(?::(?P<m>\d{2}))?\s*(?P<ampm>am|pm)",
     re.IGNORECASE,
 )
 
 
 def _parse_reset_sleep_seconds(error_text: str) -> int | None:
-    """If the error text contains 'resets HH:MM(am|pm)', compute seconds until
+    """If the error text contains 'resets H(:MM)?(am|pm)', compute seconds until
     that time (in the local timezone), plus a small buffer. Returns None if
     no parse."""
     m = _RESET_TIME_RE.search(error_text)
     if not m:
         return None
     h = int(m.group("h"))
-    minute = int(m.group("m"))
+    minute = int(m.group("m") or 0)
     ampm = m.group("ampm").lower()
     # 12am = midnight, 12pm = noon
     if ampm == "am":
