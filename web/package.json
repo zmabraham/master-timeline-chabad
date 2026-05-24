@@ -1,0 +1,23 @@
+{
+  "name": "web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@types/lunr": "^2.3.7",
+    "typescript": "~6.0.2",
+    "vite": "^8.0.12"
+  },
+  "dependencies": {
+    "lunr": "^2.3.9",
+    "marked": "^18.0.4",
+    "vis-data": "^8.0.4",
+    "vis-timeline": "^8.5.1"
+  }
+}
