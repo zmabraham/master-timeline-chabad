@@ -1,66 +1,115 @@
 # Resume / Handoff — Master Timeline Chabad
 
-If this Claude Code session ended abruptly, here's how the next session picks up cleanly.
+A fresh Claude Code session should read this file first to pick up exactly where the last one left off.
 
-## Project state
+---
+
+## Current state (as of 2026-05-24)
+
+**Plan 1 (ingestion) is COMPLETE.** All 27 tasks done. The pipeline ran end-to-end and produced:
+
+- `public/events.json` — **8,159 events** (post-cleanup), 1500–2026, sorted chronologically
+- `public/stories/<id>.md` — 8,159 markdown files (one per event)
+- `public/photos/` — empty (Pass 4 KG entity match didn't link any photo URLs; deferred to v1.5)
+
+Significance distribution: 694 macro (≥80) / 3,195 meso (40–79) / 4,270 micro (<40).
+
+**Plan 2 (web app) is WRITTEN and APPROVED.** 10 tasks, ready to execute.
+
+**Next step:** execute Plan 2.
+
+---
+
+## Repo state
 
 - **Repo:** `/home/chassidusaicon/code/master-timeline-chabad`
-- **Branch:** `ingest/v1` (NOT `main` — main holds only design+plan docs)
-- **Status file:** [`docs/superpowers/state/ingestion-progress.md`](docs/superpowers/state/ingestion-progress.md) — checkbox per task
-- **Plan:** [`docs/superpowers/plans/2026-05-20-ingestion-pipeline.md`](docs/superpowers/plans/2026-05-20-ingestion-pipeline.md) — 27 tasks
-- **Spec:** [`docs/superpowers/specs/2026-05-20-chabad-history-timeline-design.md`](docs/superpowers/specs/2026-05-20-chabad-history-timeline-design.md)
+- **GitHub:** [github.com/zmabraham/master-timeline-chabad](https://github.com/zmabraham/master-timeline-chabad) (private)
+- **Branch you're working on:** `ingest/v1` (NOT `main` — main has only design+plan docs)
+- **Tests:** 75 ingestion-package tests passing — verify with `cd ingest && uv run pytest -v`
 
-## Pre-authorizations granted by zmabraham (2026-05-20)
+Key files for the next session:
 
-1. **Tasks 3–26 may run autonomously** via subagent-driven-development. Surface only on BLOCKED or after 3 fix iterations.
-2. **Task 27 may proceed automatically** once tasks 1–26 are green. Hard spend cap: **$250**. Pause for human eyes during the macro-event review step (open `ingest/intermediate/review.html`, edit `ingest/significance_overrides.yaml`).
-3. **ANTHROPIC_API_KEY** comes from the existing env var on the host machine. Verify with `printenv ANTHROPIC_API_KEY | head -c 5` before starting Task 27.
+| File | Purpose |
+|---|---|
+| [`docs/superpowers/specs/2026-05-20-chabad-history-timeline-design.md`](docs/superpowers/specs/2026-05-20-chabad-history-timeline-design.md) | Original design spec for everything |
+| [`docs/superpowers/plans/2026-05-20-ingestion-pipeline.md`](docs/superpowers/plans/2026-05-20-ingestion-pipeline.md) | Plan 1 (done) |
+| [`docs/superpowers/plans/2026-05-24-web-app.md`](docs/superpowers/plans/2026-05-24-web-app.md) | **Plan 2 — execute next** |
+| [`docs/superpowers/state/ingestion-progress.md`](docs/superpowers/state/ingestion-progress.md) | Plan 1 task checkboxes (all checked) |
+| `public/events.json` | The data Plan 2 will consume |
+| `public/stories/*.md` | Story bodies Plan 2 will lazy-fetch |
+| `scripts/clean-events.py` | The post-emit cleanup pass that brought 8,385 → 8,159 |
 
-## How to resume
+---
 
-1. **Read the progress file:** [`docs/superpowers/state/ingestion-progress.md`](docs/superpowers/state/ingestion-progress.md) shows which tasks are done.
-2. **Check git log:** `git -C /home/chassidusaicon/code/master-timeline-chabad log --oneline ingest/v1` — every completed task has a `feat(ingest):` or `fix(ingest):` commit.
-3. **Verify tests still pass:** `cd ingest && uv run pytest -v`
-4. **Pick up at the next pending task:** find the first unchecked task in the progress file, locate it in the plan, dispatch the implementer subagent per the `subagent-driven-development` skill template.
+## How to resume in a fresh Claude Code session
 
-## Subagent-driven-development cycle (per task)
-
-For each task: implementer → spec-compliance reviewer → code-quality reviewer → fix-loop until both approve → mark task done → next task.
-
-Prompt templates live at: `~/.claude/plugins/cache/superpowers-marketplace/superpowers/5.0.5/skills/subagent-driven-development/`
-
-## Task 27 execution
-
-When tasks 1-26 are green:
+### 1. Open Claude Code in the repo
 
 ```bash
-cd /home/chassidusaicon/code/master-timeline-chabad/ingest
-
-# Pre-flight checks
-test -n "$ANTHROPIC_API_KEY" && echo "API key set" || echo "MISSING ANTHROPIC_API_KEY"
-uv run pytest -v   # all tests must pass
-
-# Run the pipeline
-make pass1                   # seconds, $0
-make pass2                   # 12-24h, $80-150  (PAUSE here if approaching $250 cap)
-make pass3                   # 2-4h, $15-30
-make pass4                   # <5min, $0
-make review                  # opens review.html
-# >>> HUMAN: open intermediate/review.html, edit significance_overrides.yaml, then:
-make pass4                   # re-apply overrides
-make pass5                   # 5-30min, downloads photos
-
-cd /home/chassidusaicon/code/master-timeline-chabad
-git add public/events.json public/stories/ public/photos/
-git commit -m "data: ingest run $(date +%Y-%m-%d) — full corpus emit"
+cd ~/code/master-timeline-chabad
+claude
 ```
 
-Each pass is **per-chunk cached** (`ingest/cache/<source>/<chunk_hash>.txt`), so any interruption resumes for free. Re-running the same pass twice should produce identical output (idempotency tests verify this).
+### 2. Paste this prompt to the new session
 
-## Cost cap protection
+> Read `HANDOFF.md` and `docs/superpowers/plans/2026-05-24-web-app.md`, then execute Plan 2 (the web app implementation plan) using the subagent-driven-development workflow. Pre-authorizations: all 10 tasks may run autonomously without checking back; surface only on BLOCKED or after 3 fix iterations.
 
-Before kicking off `make pass2`, the next session should sanity-check that the cache directory isn't already empty — if it is, the full Pass 2 spend will happen from scratch. If it's not empty, re-running pass2 will mostly hit the cache and cost very little.
+That's it. The new session will:
+
+1. Read this handoff to understand state
+2. Read Plan 2 to know what to build
+3. Dispatch implementer + reviewer subagents per task per the `subagent-driven-development` skill
+4. Mark each task complete via the progress tracker
+5. Commit each task; push when done
+
+### Alternative — execute one task at a time
+
+If you'd rather drive each task manually (more visibility, slower), use:
+
+> Read `HANDOFF.md` and `docs/superpowers/plans/2026-05-24-web-app.md`. Start by executing only Task 1. Stop and report back when Task 1 is done.
+
+---
+
+## Pre-authorizations carrying forward
+
+1. **Plan 2 tasks 1–10 may run autonomously** via subagent-driven-development. Same pattern as Plan 1.
+2. **GitHub Pages deploy** (Task 10) requires you to enable Pages in the GitHub repo Settings → Pages → Source = "GitHub Actions" (one-time manual step in the UI).
+3. **`gh` CLI is authenticated** as `zmabraham` with `repo` + `workflow` scopes — the next session can push and create workflows freely.
+
+---
+
+## Background processes — likely cleanup needed
+
+The last session left these running. They're harmless but the new session may want to tidy up:
 
 ```bash
-du -sh ingest/cache/  # rough proxy for "how much has already been spent"
+# Long-running processes from the Plan 1 execution (likely already finished or zombie):
+pgrep -fa "timeline_ingest pass" 2>/dev/null
+pgrep -fa "finish-ingest.sh"     2>/dev/null
+
+# HTTP server + Cloudflare tunnel for snapshot downloads:
+pgrep -fa "python3 -m http.server 49823" 2>/dev/null
+pgrep -fa "cloudflared.*tunnel"          2>/dev/null
+
+# Kill all of the above if any are still running:
+pkill -f "timeline_ingest pass"
+pkill -f "finish-ingest.sh"
+pkill -f "python3 -m http.server 49823"
+pkill -f "/tmp/cloudflared-new tunnel"
 ```
+
+---
+
+## If Plan 2 also gets messy
+
+Same pattern as Plan 1's recovery: open a fresh session, paste the resume prompt. The git history has every committed step; the next session reads `git log --oneline ingest/v1` to see what's done.
+
+---
+
+## Open issues to be aware of
+
+- **Photos.** Pass 4's `_build_entity_index` reads `image` field from the Chabadpedia knowledge graphs but the actual KG schema uses a different key. Result: 0/8,159 events have `photo` set. The schema field is there in events.json; Plan 2 will render `<img>` if it exists and skip if not. A separate v1.5 ticket should fix `_build_entity_index` and re-run Pass 4 + Pass 5.
+
+- **Data quality.** The cleanup pass dropped 226 garbage events (Chabadpedia bio templates, anachronisms, calendar-label fragments, etc.). Some legitimate ones may still need manual review — Plan 2 surfaces them in the UI where the user can flag for re-scoring via `ingest/significance_overrides.yaml`.
+
+- **Snapshot CSVs.** `snapshots/2026-05-24-events-pass2.csv` is a pre-translation snapshot for reference. Drop it from the timeline if you don't need it.
