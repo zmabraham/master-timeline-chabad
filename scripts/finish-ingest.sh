@@ -18,8 +18,9 @@ REPO=/home/chassidusaicon/code/master-timeline-chabad
 INGEST=$REPO/ingest
 LOG=/tmp/finish-ingest.log
 EXTRACTED=$INGEST/intermediate/02_extracted.json
-MAX_PASS2_RESTARTS=10
-PASS2_RESTART_DELAY_S=300   # 5 min cushion between restarts
+MAX_PASS2_RESTARTS=50         # tolerate a full overnight Max-window closure
+PASS2_RESTART_DELAY_S=300     # base backoff between restarts (5 min)
+PASS2_RESTART_DELAY_MAX_S=3600  # cap after exponential backoff (1 hour)
 
 ts()  { date +"%Y-%m-%d %H:%M:%S"; }
 log() { printf "[%s] %s\n" "$(ts)" "$*" >> "$LOG"; }
@@ -68,8 +69,19 @@ while [ ! -f "$EXTRACTED" ]; do
   # Wait a tiny bit so the process has registered, then loop.
   sleep 5
   if ! pass2_alive; then
-    log "  pass2 died immediately after spawn — sleeping ${PASS2_RESTART_DELAY_S}s before next retry"
-    sleep "$PASS2_RESTART_DELAY_S"
+    # Exponential backoff so an overnight Max closure doesn't burn the
+    # whole restart budget in a tight loop. Doubles each consecutive
+    # instant-kill, capped at PASS2_RESTART_DELAY_MAX_S.
+    exp=$(( restart_count - 1 ))
+    if [ "$exp" -gt 5 ]; then exp=5; fi
+    multiplier=1
+    for (( j=0; j<exp; j++ )); do multiplier=$(( multiplier * 2 )); done
+    delay=$(( PASS2_RESTART_DELAY_S * multiplier ))
+    if [ "$delay" -gt "$PASS2_RESTART_DELAY_MAX_S" ]; then
+      delay=$PASS2_RESTART_DELAY_MAX_S
+    fi
+    log "  pass2 died immediately after spawn — sleeping ${delay}s before next retry"
+    sleep "$delay"
   fi
 done
 
