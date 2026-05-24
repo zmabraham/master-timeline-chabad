@@ -3,6 +3,7 @@ import { buildTimeline } from './timeline';
 import { buildPanel } from './panel';
 import { buildSearch } from './search';
 import { initialFilters, applyFilters, buildFilterBar } from './filters';
+import { buildGroupByToggle } from './groupby';
 import './styles.css';
 import 'vis-timeline/styles/vis-timeline-graph2d.min.css';
 
@@ -30,9 +31,15 @@ app.innerHTML = `
   );
 
   const filters = initialFilters();
+  const header = document.querySelector('header')!;
+
   const filtersHost = document.createElement('div');
   filtersHost.id = 'filters';
-  document.querySelector('header')!.appendChild(filtersHost);
+  header.appendChild(filtersHost);
+
+  const groupByHost = document.createElement('div');
+  groupByHost.id = 'groupby';
+  header.appendChild(groupByHost);
 
   const searchEl = document.getElementById('search') as HTMLInputElement;
   let debounce: number | undefined;
@@ -44,6 +51,7 @@ app.innerHTML = `
   }
 
   buildFilterBar(filtersHost, filters, refresh);
+  buildGroupByToggle(groupByHost, 'rebbe', (g) => tl.setGroupBy(g));
 
   searchEl.addEventListener('input', () => {
     clearTimeout(debounce);
