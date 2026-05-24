@@ -1,0 +1,5 @@
+# 5734 5735 5736 5730 (5730) abbreviated as 5730
+
+*1970*
+
+5734 5735 5736 5730 (5730) abbreviated as 5730 is a Hebrew year which began on 1 Tishrei (evening of September 13, 1969), and ended on 29 Elul (September 30, 1970)
