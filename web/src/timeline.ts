@@ -78,6 +78,10 @@ export interface TimelineHandle {
   timeline: Timeline;
   refresh(events: EventRecord[]): void;
   setGroupBy(mode: GroupBy): void;
+  zoomIn(): void;
+  zoomOut(): void;
+  fit(): void;
+  goToYear(year: number): void;
 }
 
 export function buildTimeline(
@@ -92,20 +96,29 @@ export function buildTimeline(
   const items = new DataSet(events.map((e) => itemFor(e, currentMode)));
 
   const options: TimelineOptions = {
-    cluster: { titleTemplate: '{count} events', maxItems: 1 },
+    cluster: { titleTemplate: '{count} events — click to zoom in', maxItems: 1 },
     stack: true,
     orientation: { axis: 'bottom' },
     zoomMin: 1000 * 60 * 60 * 24 * 7,
     zoomMax: 1000 * 60 * 60 * 24 * 365 * 500,
     horizontalScroll: true,
-    zoomKey: 'ctrlKey',
     margin: { item: 4 },
   };
 
   const tl = new Timeline(container, items, groups, options);
-  tl.on('select', (props) => {
-    const id = props.items[0];
-    if (typeof id === 'string') onSelect(id);
+
+  tl.on('click', (props) => {
+    if (props.what !== 'item' || props.item == null) return;
+    if (typeof props.item === 'string') {
+      onSelect(props.item);
+    } else if (props.time) {
+      // Cluster clicked — zoom in 2× centred on the click point.
+      const window = tl.getWindow();
+      const span = window.end.getTime() - window.start.getTime();
+      const centre = props.time.getTime();
+      const half = span / 4;
+      tl.setWindow(new Date(centre - half), new Date(centre + half), { animation: { duration: 350, easingFunction: 'easeInOutQuad' } });
+    }
   });
 
   function rebuild() {
@@ -124,6 +137,20 @@ export function buildTimeline(
     setGroupBy(mode) {
       currentMode = mode;
       rebuild();
+    },
+    zoomIn() {
+      tl.zoomIn(0.5);
+    },
+    zoomOut() {
+      tl.zoomOut(0.5);
+    },
+    fit() {
+      tl.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
+    },
+    goToYear(year) {
+      const target = new Date(year, 0, 1).getTime();
+      const span = 1000 * 60 * 60 * 24 * 365 * 10; // ±5 years
+      tl.setWindow(new Date(target - span / 2), new Date(target + span / 2), { animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
     },
   };
 }
