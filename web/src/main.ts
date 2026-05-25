@@ -29,6 +29,8 @@ app.innerHTML = `
       if (ev) panel.open(ev, events);
     },
   );
+  // Expose vis-timeline instance for E2E testability
+  (window as any).__timeline = tl.timeline;
 
   const filters = initialFilters();
   const header = document.querySelector('header')!;
